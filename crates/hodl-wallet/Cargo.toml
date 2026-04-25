@@ -1,0 +1,19 @@
+[package]
+name = "hodl-wallet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+hodl-core.workspace = true
+secp256k1.workspace = true
+sha2.workspace = true
+ripemd.workspace = true
+bip39.workspace = true
+hex.workspace = true
+zeroize.workspace = true
+serde = { workspace = true }

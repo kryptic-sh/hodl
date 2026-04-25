@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hodl-core",
+    "crates/hodl-tui",
+    "crates/hodl-config",
+    "crates/hodl-wallet",
+    "apps/hodl",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hodl"
+homepage = "https://hodl.kryptic.sh"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+directories = "5"
+clap = { version = "4", features = ["derive"] }
+ratatui = "0.28"
+crossterm = "0.28"
+tokio = { version = "1", features = ["full"] }
+ureq = { version = "2", features = ["json"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Light-wallet crypto primitives. Pulled in at workspace level so all
+# crates agree on a single version of the secp256k1 / hashing stack.
+secp256k1 = { version = "0.29", features = ["rand", "global-context"] }
+sha2 = "0.10"
+ripemd = "0.1"
+bip39 = "2"
+hex = "0.4"
+zeroize = { version = "1", features = ["derive"] }
+
+hodl-core = { path = "crates/hodl-core" }
+hodl-tui = { path = "crates/hodl-tui" }
+hodl-config = { path = "crates/hodl-config" }
+hodl-wallet = { path = "crates/hodl-wallet" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Local wallet state — never commit
+*.wallet
+/data
+/.hodl
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,23 @@
+[package]
+name = "hodl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "hodl"
+path = "src/main.rs"
+
+[dependencies]
+hodl-core.workspace = true
+hodl-tui.workspace = true
+hodl-config.workspace = true
+hodl-wallet.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

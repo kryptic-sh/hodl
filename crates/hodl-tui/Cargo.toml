@@ -1,0 +1,18 @@
+[package]
+name = "hodl-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+hodl-core.workspace = true
+hodl-wallet.workspace = true
+hodl-config.workspace = true
+anyhow.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+tracing.workspace = true
