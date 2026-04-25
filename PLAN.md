@@ -53,12 +53,12 @@ overlap with already-implemented code, and light-wallet protocol availability.
 | Bitcoin Cash | BCH    | 145     | Chain-fork of BTC. CashAddr encoding. Electrum-Cash protocol.   |
 | Bitcoin SV   | BSV    | 236     | Chain-fork of BCH. Electrum SV servers.                         |
 | eCash        | XEC    | 1899    | Chain-fork of BCH. Chronik / Electrum-Cash-protocol fork.       |
-| Bitcoin Gold | BTG    | 156     | Equihash PoW; key derivation identical to BTC. ElectrumG.       |
 
 ### Tier 3 — explicitly out of scope for v1
 
-Bitcoin Diamond, DigiByte, Vertcoin, Zcash, Dash, and other forks. Add later if
-demand exists; the chain abstraction should make the marginal cost low.
+Bitcoin Gold (51%-attacked twice, near-dead dev activity), Bitcoin Diamond,
+DigiByte, Vertcoin, Zcash, Dash, and other forks. Add later if demand exists;
+the chain abstraction should make the marginal cost low.
 
 ## Mnemonic & Key Derivation
 
