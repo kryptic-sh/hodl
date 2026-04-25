@@ -36,12 +36,13 @@ overlap with already-implemented code, and light-wallet protocol availability.
 
 ### Tier 1 — first cut
 
-| Chain           | Symbol | SLIP-44 | Light protocol                         | Notes                                                 |
-| --------------- | ------ | ------- | -------------------------------------- | ----------------------------------------------------- |
-| Bitcoin         | BTC    | 0       | Electrum protocol (1.4) / BIP-157/158  | Reference impl. P2PKH + P2SH + bech32 + taproot.      |
-| Ethereum        | ETH    | 60      | JSON-RPC (Infura / Alchemy / Ankr / …) | EIP-155 chain id. EIP-1559 fee market.                |
-| BNB Smart Chain | BNB    | 60      | JSON-RPC, EVM-compatible               | Reuses ETH derivation + signer. Chain id 56.          |
-| Monero          | XMR    | 128     | LWS (light-wallet server) protocol     | View-key sync via remote node. Send via own node API. |
+| Chain           | Symbol | SLIP-44 | Light protocol                         | Notes                                                           |
+| --------------- | ------ | ------- | -------------------------------------- | --------------------------------------------------------------- |
+| Bitcoin         | BTC    | 0       | Electrum protocol (1.4) / BIP-157/158  | Reference impl. P2PKH + P2SH + bech32 + taproot.                |
+| Ethereum        | ETH    | 60      | JSON-RPC (Infura / Alchemy / Ankr / …) | EIP-155 chain id. EIP-1559 fee market.                          |
+| BNB Smart Chain | BNB    | 60      | JSON-RPC, EVM-compatible               | Reuses ETH derivation + signer. Chain id 56.                    |
+| Monero          | XMR    | 128     | LWS (light-wallet server) protocol     | View-key sync via remote node. Send via own node API.           |
+| Navio           | NAVIO  | 130     | ElectrumX (Electrum-Navio servers)     | Bitcoin-derivative codebase, PoS. xNAV privacy token via blsCT. |
 
 ### Tier 2 — Bitcoin-derivative chains, by market cap
 
