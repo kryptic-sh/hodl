@@ -113,7 +113,7 @@ Native 25-word Monero seeds may be supported as a separate import path post-v1.
               v
 +-------------------------------+
 | hodl-chain-* (per-family)     |   trait Chain — balance, history, send
-|   hodl-chain-bitcoin          |     BTC + BCH + BSV + LTC + DOGE + BTG + XEC
+|   hodl-chain-bitcoin          |     BTC + BCH + BSV + LTC + DOGE + BTG + XEC + NAVIO
 |   hodl-chain-ethereum         |     ETH + BSC (EVM)
 |   hodl-chain-monero           |     XMR
 +-------------------------------+
@@ -143,21 +143,23 @@ pub trait Chain {
 
 The Bitcoin-family crate parameterizes a single implementation by network
 constants (magic bytes, address HRP, dust limit, default port), so adding
-Litecoin / Doge / BCH / BSV / BTG / XEC after BTC works is mostly a config
-record + endpoint list.
+Litecoin / Doge / BCH / BSV / BTG / XEC / Navio after BTC works is mostly a
+config record + endpoint list. Navio's blsCT-based xNAV privacy spends are the
+one exception — they need a dedicated module on top of the base UTXO codec.
 
 ## Light-Wallet Backends
 
 Per-chain endpoint lists ship as defaults; users can override or point at their
 own node in `config.toml`.
 
-| Family   | Protocol                 | Privacy notes                                                               |
-| -------- | ------------------------ | --------------------------------------------------------------------------- |
-| Bitcoin  | Electrum 1.4             | Server sees scripthashes you query → leaks address linkage. Tor optional.   |
-| Bitcoin  | BIP-157/158 (Neutrino)   | Better privacy; client filters blocks itself. Heavier bandwidth. Post-v1.   |
-| Ethereum | JSON-RPC                 | Provider sees address queries. Multi-provider rotation reduces signal.      |
-| BSC      | JSON-RPC                 | Same as ETH. Default to public RPC, Ankr fallback.                          |
-| Monero   | LWS (open-monero-server) | Server learns view key in plaintext under naive setup. Default = self-host. |
+| Family   | Protocol                 | Privacy notes                                                                                  |
+| -------- | ------------------------ | ---------------------------------------------------------------------------------------------- |
+| Bitcoin  | Electrum 1.4             | Server sees scripthashes you query → leaks address linkage. Tor optional.                      |
+| Bitcoin  | BIP-157/158 (Neutrino)   | Better privacy; client filters blocks itself. Heavier bandwidth. Post-v1.                      |
+| Ethereum | JSON-RPC                 | Provider sees address queries. Multi-provider rotation reduces signal.                         |
+| BSC      | JSON-RPC                 | Same as ETH. Default to public RPC, Ankr fallback.                                             |
+| Monero   | LWS (open-monero-server) | Server learns view key in plaintext under naive setup. Default = self-host.                    |
+| Navio    | ElectrumX                | Public spends like Bitcoin. xNAV (blsCT) spends shielded — server sees commitment, not amount. |
 
 ## Storage Layout
 
@@ -224,6 +226,9 @@ Keymap: vim-ish (`j/k` move, `gg/G` jump, `:` command, `/` search, `q` quit).
   XEC).
 - **M7 — Monero.** BIP-39 → Ledger-compat derivation, view-key sync via LWS,
   send via own-node JSON-RPC.
+- **M7.5 — Navio.** Public NAVIO via the Bitcoin-family path (constants record +
+  Electrum-Navio endpoints). xNAV blsCT shielded spends as a follow-up module —
+  receive only at first, full send post-v1.
 - **M8 — polish.** Tor toggle, address book, multi-wallet switcher, optional
   price feed, packaged binaries (deb / brew tap / scoop).
 
