@@ -47,6 +47,17 @@ hodl-tui = { path = "crates/hodl-tui" }
 hodl-config = { path = "crates/hodl-config" }
 hodl-wallet = { path = "crates/hodl-wallet" }
 
+# Local-dev override: when hodl starts consuming hjkl-* (vim-ish
+# keymap per README), point them at the in-tree checkout so we can
+# iterate against unreleased changes without waiting on the
+# crates.io publish rate limit. Comment out once stable hjkl tags
+# satisfy the workspace pins.
+[patch.crates-io]
+hjkl-buffer = { path = "../hjkl/crates/hjkl-buffer" }
+hjkl-engine = { path = "../hjkl/crates/hjkl-engine" }
+hjkl-editor = { path = "../hjkl/crates/hjkl-editor" }
+hjkl-ratatui = { path = "../hjkl/crates/hjkl-ratatui" }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
