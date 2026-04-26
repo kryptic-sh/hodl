@@ -1,5 +1,9 @@
 # hodl
 
+[![CI](https://github.com/kryptic-sh/hodl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hodl/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Website](https://img.shields.io/badge/website-hodl.kryptic.sh-7ee787)](https://hodl.kryptic.sh)
+
 Light crypto wallet. TUI. Rust + ratatui.
 
 ## Status
