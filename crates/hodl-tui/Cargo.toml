@@ -16,3 +16,4 @@ anyhow.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 tracing.workspace = true
+zeroize.workspace = true

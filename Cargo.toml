@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -38,9 +38,14 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 secp256k1 = { version = "0.29", features = ["rand", "global-context"] }
 sha2 = "0.10"
 ripemd = "0.1"
-bip39 = "2"
+bip39 = { version = "2", features = ["crate_rand"] }
+bip32 = "0.5"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+rand = "0.8"
 hex = "0.4"
 zeroize = { version = "1", features = ["derive"] }
+tempfile = "3"
 
 hodl-core = { path = "crates/hodl-core" }
 hodl-tui = { path = "crates/hodl-tui" }
