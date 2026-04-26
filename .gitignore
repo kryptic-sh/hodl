@@ -2,6 +2,10 @@
 **/*.rs.bk
 *.pdb
 
+# hodl ships binaries — track Cargo.lock for reproducible CI builds
+# (overrides global *.lock ignore)
+!Cargo.lock
+
 # Local wallet state — never commit
 *.wallet
 /data
