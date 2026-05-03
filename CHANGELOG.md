@@ -8,11 +8,22 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-03
+
 ### Changed
 
 - `hodl --help` now shows ASCII-art branding plus the package version inline in
   the long-form help. `--version` continues to print the version on its own.
   Mirrors the cross-project CLI standardization.
+- **Vault path resolution migrated to `hjkl-config` 0.2 (XDG-everywhere).**
+  `hodl_wallet::storage::default_data_dir()` now routes through
+  `hjkl_config::data_dir("hodl")` instead of
+  `directories::ProjectDirs::from("sh", "kryptic", "hodl")`. macOS users move
+  from `~/Library/Application Support/sh.kryptic.hodl/wallets/` to
+  `~/.local/share/hodl/wallets/`. Windows users move from
+  `%APPDATA%\kryptic\hodl\data\wallets\` to `~/.local/share/hodl/wallets/`.
+  Linux paths unchanged. Replaced `directories` workspace dep with
+  `hjkl-config = "0.2"`.
 
 ### Added
 
@@ -64,6 +75,7 @@ and this project adheres to
 
 - Workspace scaffold (M0): crates, CI lint/build/test on Linux.
 
-[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.1.0
 [0.0.2]: https://github.com/kryptic-sh/hodl/releases/tag/v0.0.2
 [0.0.1]: https://github.com/kryptic-sh/hodl/releases/tag/v0.0.1

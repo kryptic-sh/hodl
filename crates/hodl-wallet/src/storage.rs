@@ -2,15 +2,17 @@
 
 use std::path::{Path, PathBuf};
 
-use directories::ProjectDirs;
-
 use crate::error::{Result, WalletError};
 
 /// Default data root: `$XDG_DATA_HOME/hodl/`.
+///
+/// Routes through `hjkl_config::data_dir` for XDG-everywhere resolution
+/// (Linux/macOS/Windows all honor `$XDG_DATA_HOME` with `~/.local/share`
+/// fallback). Replaces the prior `directories::ProjectDirs` lookup, which
+/// used a `sh.kryptic.hodl` Bundle ID layout on macOS/Windows.
 pub fn default_data_dir() -> Result<PathBuf> {
-    let pd = ProjectDirs::from("sh", "kryptic", "hodl")
-        .ok_or_else(|| WalletError::Storage("could not resolve project data directory".into()))?;
-    Ok(pd.data_dir().to_path_buf())
+    hjkl_config::data_dir("hodl")
+        .map_err(|e| WalletError::Storage(format!("could not resolve data dir: {e}")))
 }
 
 /// `<data_root>/wallets/`.

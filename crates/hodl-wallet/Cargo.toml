@@ -21,7 +21,7 @@ hex.workspace = true
 zeroize.workspace = true
 serde = { workspace = true }
 thiserror.workspace = true
-directories.workspace = true
+hjkl-config.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
