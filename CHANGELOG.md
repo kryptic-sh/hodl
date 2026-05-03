@@ -10,6 +10,12 @@ and this project adheres to
 
 ### Added
 
+- M5 BSC: `NetworkParams::BSC_MAINNET` (eip155_chain_id 56) on
+  `hodl-chain-ethereum`. Reuses the BIP-44 path `m/44'/60'/account'/0/index` per
+  BEP-44 — same key + address as Ethereum mainnet for a given seed. No new
+  crate, no separate RPC client. Empty default RPC list per the no-phone-home
+  policy; users configure endpoints via `Config.chains`.
+
 - New crate `hodl-chain-ethereum`: JSON-RPC client (over `ureq`), hand-rolled
   RLP encoder, EIP-1559 (type-0x02) transaction build + EIP-155 chain-id-bound
   ECDSA sign + broadcast. EIP-55 address checksum encode + parse. BIP-44 path

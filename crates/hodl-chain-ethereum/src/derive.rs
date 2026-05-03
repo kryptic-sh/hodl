@@ -55,4 +55,19 @@ mod tests {
         let addr = derive_address(&seed, 0, 0).unwrap();
         assert_eq!(addr, "0x9858EfFD232B4033E47d90003D41EC34EcaEda94");
     }
+
+    /// BSC reuses coin_type 60 (BEP-44), so m/44'/60'/0'/0/0 yields the
+    /// same address as Ethereum for a given seed.
+    #[test]
+    fn derive_bsc_address_matches_eth() {
+        let seed = seed_bytes();
+        // derive_address is hardcoded to m/44'/60'/account'/0/index, so
+        // the result is identical regardless of NetworkParams instance.
+        let bsc_addr = derive_address(&seed, 0, 0).unwrap();
+        let eth_addr = "0x9858EfFD232B4033E47d90003D41EC34EcaEda94";
+        assert_eq!(
+            bsc_addr, eth_addr,
+            "BSC m/44'/60'/0'/0/0 must match ETH (BEP-44 reuse)"
+        );
+    }
 }
