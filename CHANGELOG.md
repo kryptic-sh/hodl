@@ -10,35 +10,47 @@ and this project adheres to
 
 ### Added
 
+- M2 TUI surfaces: onboarding (create + restore), accounts list, receive (QR +
+  OSC-52 clipboard yank), settings — all built on `hjkl-form` (modal vim grammar
+  inside every field) and `hjkl-picker` (chain / endpoint switchers).
+- Workspace deps `hjkl-picker = "0.3"`, `hjkl-clipboard = "0.4"`,
+  `qrcode = "0.14"`.
+- `crates/hodl-tui/src/`: `app.rs` (app state machine), `account.rs` (Bitcoin
+  accounts table + chain picker overlay), `receive.rs` (QR + clipboard yank),
+  `settings.rs` (settings form, on-save disk write), `onboarding.rs` (create +
+  restore flows), `clipboard.rs` (thin `hjkl-clipboard` wrapper).
+
+### Changed
+
+- `hodl init` now drops into the modal-form onboarding TUI instead of the
+  line-prompted flow. Mnemonic display + write-down gate happen inside the
+  alt-screen. A new `hodl restore` subcommand triggers the restore flow
+  directly.
+- `hodl_tui::lock::Outcome` gains `Unlocked(UnlockedWallet)` so the lock screen
+  hands the unlocked wallet to the app loop instead of rendering its M1
+  placeholder. `Mode::Unlocked` rendering path and the manual `l` lock toggle
+  are removed from `lock.rs`.
+
 - New crate `hodl-chain-bitcoin`: Electrum 1.4 client (TCP + TLS), BIP-44 / 49 /
   84 / 86 address derivation (P2PKH, P2SH-P2WPKH, P2WPKH bech32, P2TR bech32m),
   gap-limit scan, balance + history read path. `BitcoinChain` implements
   `hodl_core::Chain` for the read path; `build_tx` / `sign` / `broadcast` return
   `Error::Chain("not implemented")` until PE (M3 send).
 - Network constants: `NetworkParams::BITCOIN_MAINNET` and `BITCOIN_TESTNET`.
-  Other Bitcoin-derivative chains (LTC, DOGE, BCH, BSV, XEC, Navio) drop in as
-  additional `NetworkParams` records in PH / PJ.
 - `hodl-core` types: `ChainId`, `Address`, `Amount`, `FeeRate`, `TxId`, `TxRef`,
   `SendParams`, `UnsignedTx`, `SignedTx`, `PrivateKeyBytes` (Zeroize), and the
-  `Chain` trait per `PLAN.md`. Replaces the M1 stub.
+  `Chain` trait per `PLAN.md`.
 - `hodl-config` endpoint registry: per-chain `endpoints` (Electrum / JSON-RPC /
   LWS), `tor`, `lock.idle_timeout_secs`, `kdf` preset. Loader returns in-memory
   defaults on missing file — never auto-writes.
-
-### Added
-
 - Workspace deps `hjkl-form = "0.3"` (with `crossterm` feature) and
   `hjkl-ratatui = "0.3"`.
-- Bumped workspace pins `ratatui` 0.28 → 0.30 and `crossterm` 0.28 → 0.29 to
-  align with the hjkl stack and eliminate duplicate compilation of both crates.
+- Bumped workspace pins `ratatui` 0.28 → 0.30 and `crossterm` 0.28 → 0.29.
 
 ### Changed
 
-- `hodl-tui::lock` now uses `hjkl-form` for password entry. Each character goes
-  through a `TextFieldEditor` driven by the hjkl modal FSM (Form-Normal /
-  Form-Insert), giving the lock screen the same vim-style input grammar as the
-  rest of the planned TUI surfaces. Password is still masked on render and
-  zeroized on every unlock attempt.
+- `hodl-tui::lock` now uses `hjkl-form` for password entry (carried from prior
+  phase). Password is masked on render and zeroized on every unlock attempt.
 
 ## [0.1.2] - 2026-05-03
 

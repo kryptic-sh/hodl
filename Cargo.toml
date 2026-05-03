@@ -30,6 +30,9 @@ toml = "0.8"
 hjkl-config = "0.2"
 hjkl-form = { version = "0.3", features = ["crossterm"] }
 hjkl-ratatui = "0.3"
+hjkl-picker = "0.3"
+hjkl-clipboard = "0.4"
+qrcode = "0.14"
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.30"
 crossterm = "0.29"

@@ -12,13 +12,18 @@ authors.workspace = true
 hodl-core.workspace = true
 hodl-wallet.workspace = true
 hodl-config.workspace = true
+hodl-chain-bitcoin.workspace = true
 hjkl-form.workspace = true
 hjkl-ratatui.workspace = true
+hjkl-picker.workspace = true
+hjkl-clipboard.workspace = true
 anyhow.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
+qrcode.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
