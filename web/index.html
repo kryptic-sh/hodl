@@ -376,6 +376,7 @@
         margin: 40px 0 0;
       }
       .term .chrome {
+        position: relative;
         display: flex;
         align-items: center;
         gap: 8px;
@@ -398,12 +399,13 @@
         background: #27c93f;
       }
       .term .titlebar {
-        flex: 1;
-        margin-left: 12px;
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
         font-family: var(--mono);
         font-size: 12px;
         color: var(--fg-muted);
-        text-align: center;
+        pointer-events: none;
       }
       .term .screen {
         background: #0a0c10;
