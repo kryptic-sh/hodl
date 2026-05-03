@@ -10,6 +10,10 @@ and this project adheres to
 
 ### Added
 
+- M7.5 Navio: `NetworkParams::NAVIO_MAINNET` on `hodl-chain-bitcoin`. Public
+  NAVIO via the Bitcoin-family path (P2PKH + bech32 P2WPKH). xNAV blsCT shielded
+  spends explicitly post-v1 — no module yet.
+
 - M6 BTC family: `NetworkParams::LITECOIN_MAINNET`, `DOGECOIN_MAINNET`,
   `BITCOIN_CASH_MAINNET`, `BITCOIN_SV_MAINNET`, `ECASH_MAINNET` on
   `hodl-chain-bitcoin`. Reuses the same Electrum client, derive paths, and
