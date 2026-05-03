@@ -10,8 +10,25 @@ use hodl_wallet::mnemonic::{self, WordCount};
 use hodl_wallet::storage;
 use hodl_wallet::vault::KdfParams;
 
+const LONG_ABOUT: &str = concat!(
+    "\n",
+    " _               _ _ \n",
+    "| |__   ___   __| | |\n",
+    "| '_ \\ / _ \\ / _` | |\n",
+    "| | | | (_) | (_| | |\n",
+    "|_| |_|\\___/ \\__,_|_|\n",
+    "\n",
+    "Light crypto wallet — TUI · v",
+    env!("CARGO_PKG_VERSION"),
+);
+
 #[derive(Parser, Debug)]
-#[command(name = "hodl", version, about = "Light crypto wallet — TUI")]
+#[command(
+    name = "hodl",
+    version,
+    about = "Light crypto wallet — TUI",
+    long_about = LONG_ABOUT,
+)]
 struct Cli {
     /// Override the data directory (defaults to `$XDG_DATA_HOME/hodl`).
     #[arg(long, global = true)]
@@ -134,5 +151,42 @@ fn read_password_twice<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> R
         }
         b.zeroize();
         return Ok(a);
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn version_flag_returns_pkg_version() {
+        let cmd = Cli::command();
+        let version = cmd.render_version();
+        assert!(
+            version.contains(env!("CARGO_PKG_VERSION")),
+            "render_version output {version:?} missing CARGO_PKG_VERSION"
+        );
+    }
+
+    #[test]
+    fn long_help_contains_ascii_art() {
+        let mut cmd = Cli::command();
+        let help = cmd.render_long_help().to_string();
+        // Distinctive interior line of the figlet 'hodl' standard font.
+        assert!(
+            help.contains("|_| |_|\\___/ \\__,_|_|"),
+            "long_help missing ASCII art line; got:\n{help}"
+        );
+    }
+
+    #[test]
+    fn long_help_contains_pkg_version() {
+        let mut cmd = Cli::command();
+        let help = cmd.render_long_help().to_string();
+        assert!(
+            help.contains(env!("CARGO_PKG_VERSION")),
+            "long_help missing CARGO_PKG_VERSION; got:\n{help}"
+        );
     }
 }

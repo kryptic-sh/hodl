@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `hodl --help` now shows ASCII-art branding plus the package version inline in
+  the long-form help. `--version` continues to print the version on its own.
+  Mirrors the cross-project CLI standardization.
+
+### Added
+
+- CLI smoke tests: `--version` returns `CARGO_PKG_VERSION`, long-form help
+  contains the ASCII art and the version.
+
 ## [0.0.2] - 2026-04-26
 
 ### Added — M1 wallet core
