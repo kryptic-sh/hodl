@@ -1,4 +1,5 @@
 pub mod address;
+pub mod cashaddr;
 pub mod chain;
 pub mod derive;
 pub mod electrum;

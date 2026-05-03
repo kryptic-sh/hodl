@@ -10,6 +10,13 @@ and this project adheres to
 
 ### Added
 
+- M6 BTC family: `NetworkParams::LITECOIN_MAINNET`, `DOGECOIN_MAINNET`,
+  `BITCOIN_CASH_MAINNET`, `BITCOIN_SV_MAINNET`, `ECASH_MAINNET` on
+  `hodl-chain-bitcoin`. Reuses the same Electrum client, derive paths, and
+  address encoders. CashAddr encoder (hand-rolled, BCH polymod) for BCH + XEC.
+  Per-chain Purpose validation: DOGE/BSV BIP-44 only; BCH/XEC BIP-44/49 only;
+  LTC BIP-44/49/84.
+
 - M5 BSC: `NetworkParams::BSC_MAINNET` (eip155_chain_id 56) on
   `hodl-chain-ethereum`. Reuses the BIP-44 path `m/44'/60'/account'/0/index` per
   BEP-44 — same key + address as Ethereum mainnet for a given seed. No new

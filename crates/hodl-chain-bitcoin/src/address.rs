@@ -1,8 +1,10 @@
 use bip32::XPub;
+use hodl_core::ChainId;
 use hodl_core::error::{Error, Result};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 
+use crate::cashaddr;
 use crate::network::NetworkParams;
 
 /// Hash160 = RIPEMD160(SHA256(data)).
@@ -22,14 +24,21 @@ fn base58check(version: u8, payload: &[u8]) -> String {
 
 /// P2PKH — pay-to-public-key-hash.
 /// Script: OP_DUP OP_HASH160 <20-byte hash> OP_EQUALVERIFY OP_CHECKSIG
+///
+/// For BCH and XEC, emits CashAddr instead of legacy base58check.
 pub fn p2pkh(xpub: &XPub, params: &NetworkParams) -> Result<String> {
     let pubkey_bytes = xpub.to_bytes();
     let h160 = hash160(&pubkey_bytes);
-    Ok(base58check(params.p2pkh_prefix, &h160))
+    match params.chain_id {
+        ChainId::BitcoinCash | ChainId::ECash => cashaddr::p2pkh_cashaddr(&h160, params.bech32_hrp),
+        _ => Ok(base58check(params.p2pkh_prefix, &h160)),
+    }
 }
 
 /// P2SH-P2WPKH — BIP-49. Wraps a P2WPKH redeem script inside P2SH.
 /// Redeem script: OP_0 <20-byte pubkey hash>
+///
+/// For BCH and XEC, emits CashAddr P2SH instead of legacy base58check.
 pub fn p2sh_p2wpkh(xpub: &XPub, params: &NetworkParams) -> Result<String> {
     let pubkey_bytes = xpub.to_bytes();
     let h160 = hash160(&pubkey_bytes);
@@ -39,7 +48,12 @@ pub fn p2sh_p2wpkh(xpub: &XPub, params: &NetworkParams) -> Result<String> {
     redeem.push(0x14); // push 20 bytes
     redeem.extend_from_slice(&h160);
     let script_hash = hash160(&redeem);
-    Ok(base58check(params.p2sh_prefix, &script_hash))
+    match params.chain_id {
+        ChainId::BitcoinCash | ChainId::ECash => {
+            cashaddr::p2sh_cashaddr(&script_hash, params.bech32_hrp)
+        }
+        _ => Ok(base58check(params.p2sh_prefix, &script_hash)),
+    }
 }
 
 /// P2WPKH — BIP-84. Native segwit bech32 (witness version 0).

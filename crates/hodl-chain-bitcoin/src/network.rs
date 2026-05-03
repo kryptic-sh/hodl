@@ -38,4 +38,69 @@ impl NetworkParams {
         default_electrum_port: 60001,
         default_electrum_tls_port: 60002,
     };
+
+    /// Litecoin mainnet. Supports BIP-44/49/84 (MWEB is post-v1, omitted here).
+    pub const LITECOIN_MAINNET: Self = Self {
+        chain_id: ChainId::Litecoin,
+        bech32_hrp: "ltc",
+        p2pkh_prefix: 0x30, // "L" addresses
+        p2sh_prefix: 0x32,  // "M" addresses (post-soft-fork standard)
+        default_electrum_port: 50001,
+        default_electrum_tls_port: 50002,
+    };
+
+    /// Dogecoin mainnet.
+    ///
+    /// **Note:** bech32 / segwit is **not deployed** on the DOGE network. The
+    /// `bech32_hrp` field is present for record symmetry only. `Purpose::Bip44`
+    /// (legacy P2PKH) is the only valid derivation path for DOGE.
+    pub const DOGECOIN_MAINNET: Self = Self {
+        chain_id: ChainId::Dogecoin,
+        bech32_hrp: "doge", // not deployed — field for symmetry only
+        p2pkh_prefix: 0x1e, // "D" addresses
+        p2sh_prefix: 0x16,  // "9" / "A" addresses
+        default_electrum_port: 50001,
+        default_electrum_tls_port: 50002,
+    };
+
+    /// Bitcoin Cash mainnet. Uses CashAddr encoding (not legacy base58check).
+    ///
+    /// The `bech32_hrp` field holds the CashAddr HRP (`"bitcoincash"`). The
+    /// address codec (see `cashaddr` module) uses this HRP rather than the
+    /// standard bech32 segwit encoder. BIP-49/84/86 are not deployed on BCH.
+    pub const BITCOIN_CASH_MAINNET: Self = Self {
+        chain_id: ChainId::BitcoinCash,
+        bech32_hrp: "bitcoincash", // CashAddr HRP
+        p2pkh_prefix: 0x00,        // legacy-compatible (rarely used)
+        p2sh_prefix: 0x05,         // legacy-compatible
+        default_electrum_port: 50001,
+        default_electrum_tls_port: 50002,
+    };
+
+    /// Bitcoin SV mainnet.
+    ///
+    /// **Note:** bech32 / segwit is **not deployed** on BSV. The `bech32_hrp`
+    /// field is present for record symmetry only. `Purpose::Bip44` (legacy
+    /// P2PKH with 0x00 prefix, same as BTC) is the only valid path for BSV.
+    pub const BITCOIN_SV_MAINNET: Self = Self {
+        chain_id: ChainId::BitcoinSv,
+        bech32_hrp: "bsv",  // not deployed — field for symmetry only
+        p2pkh_prefix: 0x00, // same as BTC legacy
+        p2sh_prefix: 0x05,
+        default_electrum_port: 50001,
+        default_electrum_tls_port: 50002,
+    };
+
+    /// eCash (XEC) mainnet. Uses CashAddr encoding with `"ecash"` HRP.
+    ///
+    /// The `bech32_hrp` field holds the CashAddr HRP (`"ecash"`). BIP-49/84/86
+    /// are not deployed on XEC.
+    pub const ECASH_MAINNET: Self = Self {
+        chain_id: ChainId::ECash,
+        bech32_hrp: "ecash", // CashAddr HRP
+        p2pkh_prefix: 0x00,
+        p2sh_prefix: 0x05,
+        default_electrum_port: 50001,
+        default_electrum_tls_port: 50002,
+    };
 }
