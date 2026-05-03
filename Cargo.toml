@@ -6,6 +6,7 @@ members = [
     "crates/hodl-config",
     "crates/hodl-wallet",
     "crates/hodl-chain-bitcoin",
+    "crates/hodl-chain-ethereum",
     "apps/hodl",
     "xtask",
 ]
@@ -57,12 +58,14 @@ bs58 = { version = "0.5", features = ["check"] }
 rustls = { version = "0.23", features = ["ring"] }
 webpki-roots = "0.26"
 k256 = { version = "0.13", features = ["arithmetic", "ecdsa"] }
+tiny-keccak = { version = "2", features = ["keccak"] }
 
 hodl-core = { path = "crates/hodl-core" }
 hodl-tui = { path = "crates/hodl-tui" }
 hodl-config = { path = "crates/hodl-config" }
 hodl-wallet = { path = "crates/hodl-wallet" }
 hodl-chain-bitcoin = { path = "crates/hodl-chain-bitcoin" }
+hodl-chain-ethereum = { path = "crates/hodl-chain-ethereum" }
 
 [profile.release]
 lto = "thin"

@@ -10,6 +10,13 @@ and this project adheres to
 
 ### Added
 
+- New crate `hodl-chain-ethereum`: JSON-RPC client (over `ureq`), hand-rolled
+  RLP encoder, EIP-1559 (type-0x02) transaction build + EIP-155 chain-id-bound
+  ECDSA sign + broadcast. EIP-55 address checksum encode + parse. BIP-44 path
+  `m/44'/60'/account'/0/index`. ERC-20 explicitly out of scope for v1 (post-v1
+  candidate per PLAN).
+- Workspace dep `tiny-keccak = "2"` for keccak256.
+
 - M3 Bitcoin send: PSBT v0 build (segwit-v0 P2WPKH inputs + outputs), greedy
   coin selection (largest-first), BIP-143 segwit sighash (hand-rolled, ~50 lines
   of `sha2`), k256-ECDSA signing, Electrum broadcast.

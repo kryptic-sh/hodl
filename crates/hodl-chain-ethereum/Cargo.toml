@@ -1,0 +1,24 @@
+[package]
+name = "hodl-chain-ethereum"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+hodl-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true
+k256.workspace = true
+tiny-keccak = { workspace = true }
+hex.workspace = true
+bip32.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
