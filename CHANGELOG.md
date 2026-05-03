@@ -8,13 +8,14 @@ and this project adheres to
 
 ## [Unreleased]
 
-### Changed
+### Added
 
-- `hodl-tui::lock` now uses `hjkl-form` for password entry. Each character goes
-  through a `TextFieldEditor` driven by the hjkl modal FSM (Form-Normal /
-  Form-Insert), giving the lock screen the same vim-style input grammar as the
-  rest of the planned TUI surfaces. Password is still masked on render and
-  zeroized on every unlock attempt.
+- `hodl-core` types: `ChainId`, `Address`, `Amount`, `FeeRate`, `TxId`, `TxRef`,
+  `SendParams`, `UnsignedTx`, `SignedTx`, `PrivateKeyBytes` (Zeroize), and the
+  `Chain` trait per `PLAN.md`. Replaces the M1 stub.
+- `hodl-config` endpoint registry: per-chain `endpoints` (Electrum / JSON-RPC /
+  LWS), `tor`, `lock.idle_timeout_secs`, `kdf` preset. Loader returns in-memory
+  defaults on missing file — never auto-writes.
 
 ### Added
 
@@ -22,6 +23,14 @@ and this project adheres to
   `hjkl-ratatui = "0.3"`.
 - Bumped workspace pins `ratatui` 0.28 → 0.30 and `crossterm` 0.28 → 0.29 to
   align with the hjkl stack and eliminate duplicate compilation of both crates.
+
+### Changed
+
+- `hodl-tui::lock` now uses `hjkl-form` for password entry. Each character goes
+  through a `TextFieldEditor` driven by the hjkl modal FSM (Form-Normal /
+  Form-Insert), giving the lock screen the same vim-style input grammar as the
+  rest of the planned TUI surfaces. Password is still masked on render and
+  zeroized on every unlock attempt.
 
 ## [0.1.2] - 2026-05-03
 

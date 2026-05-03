@@ -1,15 +1,17 @@
-//! Shared types and errors for hodl.
+//! Shared types and errors for hodl chain implementations.
 
-use thiserror::Error;
+pub mod address;
+pub mod amount;
+pub mod chain;
+pub mod chain_trait;
+pub mod error;
+pub mod fee;
+pub mod tx;
 
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("config error: {0}")]
-    Config(String),
-    #[error("wallet error: {0}")]
-    Wallet(String),
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
+pub use address::Address;
+pub use amount::Amount;
+pub use chain::ChainId;
+pub use chain_trait::{Chain, PrivateKeyBytes};
+pub use error::{Error, Result};
+pub use fee::FeeRate;
+pub use tx::{SendParams, SignedTx, TxId, TxRef, UnsignedTx};

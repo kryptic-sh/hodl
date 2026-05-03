@@ -925,8 +925,11 @@ dependencies = [
 name = "hodl-config"
 version = "0.1.2"
 dependencies = [
+ "hjkl-config",
  "hodl-core",
  "serde",
+ "tempfile",
+ "thiserror 2.0.18",
  "toml 0.8.23",
 ]
 
@@ -934,9 +937,9 @@ dependencies = [
 name = "hodl-core"
 version = "0.1.2"
 dependencies = [
- "anyhow",
  "serde",
  "thiserror 2.0.18",
+ "zeroize",
 ]
 
 [[package]]

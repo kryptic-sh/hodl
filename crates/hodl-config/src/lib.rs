@@ -1,15 +1,10 @@
-//! TOML config loading for hodl.
+//! TOML endpoint registry and config loader for hodl.
+//!
+//! Loading a missing file returns `Config::default()` in memory — no file is
+//! ever written automatically.
 
-use serde::{Deserialize, Serialize};
+mod config;
+mod error;
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct Config {
-    #[serde(default)]
-    pub rpc: RpcConfig,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct RpcConfig {
-    pub bitcoin: Option<String>,
-    pub ethereum: Option<String>,
-}
+pub use config::{ChainConfig, Config, Endpoint, KdfPreset, LockConfig, TorConfig};
+pub use error::ConfigError;
