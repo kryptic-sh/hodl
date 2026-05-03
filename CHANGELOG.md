@@ -63,3 +63,7 @@ and this project adheres to
 ## [0.0.1] - earlier
 
 - Workspace scaffold (M0): crates, CI lint/build/test on Linux.
+
+[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.0.2...HEAD
+[0.0.2]: https://github.com/kryptic-sh/hodl/releases/tag/v0.0.2
+[0.0.1]: https://github.com/kryptic-sh/hodl/releases/tag/v0.0.1
