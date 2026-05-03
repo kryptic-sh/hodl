@@ -8,6 +8,21 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- `hodl-tui::lock` now uses `hjkl-form` for password entry. Each character goes
+  through a `TextFieldEditor` driven by the hjkl modal FSM (Form-Normal /
+  Form-Insert), giving the lock screen the same vim-style input grammar as the
+  rest of the planned TUI surfaces. Password is still masked on render and
+  zeroized on every unlock attempt.
+
+### Added
+
+- Workspace deps `hjkl-form = "0.3"` (with `crossterm` feature) and
+  `hjkl-ratatui = "0.3"`.
+- Bumped workspace pins `ratatui` 0.28 → 0.30 and `crossterm` 0.28 → 0.29 to
+  align with the hjkl stack and eliminate duplicate compilation of both crates.
+
 ## [0.1.2] - 2026-05-03
 
 ### Fixed

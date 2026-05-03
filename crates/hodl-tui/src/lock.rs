@@ -1,9 +1,17 @@
 //! Lock-screen UI: password entry, unlock, idle auto-lock.
+//!
+//! The password field is a single-field [`hjkl_form::Form`] backed by a
+//! [`hjkl_form::TextFieldEditor`]. Vim-modal input (Normal / Insert) routes
+//! through the form FSM; control keys (Ctrl-C/D, Esc-quit, manual lock) are
+//! intercepted before forwarding. The field text is rendered as `*` characters
+//! — hjkl-form has no native masked type, so we read the char count from the
+//! buffer and render a masked paragraph ourselves (option b from the plan).
 
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use hjkl_form::{Field, FieldMeta, Form, FormMode, Input, TextFieldEditor};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -16,13 +24,12 @@ use hodl_wallet::{UnlockedWallet, Wallet};
 
 /// What screen we're currently rendering.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum Mode {
+pub(crate) enum Mode {
     Locked,
     Unlocked,
 }
 
-/// Outcome reported back to the caller. Currently we just exit cleanly in
-/// both paths; this type lets future M2 wire-up hand off the unlocked wallet.
+/// Outcome reported back to the caller.
 #[derive(Debug)]
 pub enum Outcome {
     Quit,
@@ -34,15 +41,17 @@ pub fn event_loop<B: Backend>(
     terminal: &mut Terminal<B>,
     wallet: &Wallet,
     idle_timeout: Duration,
-) -> Result<Outcome> {
+) -> Result<Outcome>
+where
+    B::Error: Send + Sync + 'static,
+{
     let mut state = LockState::new();
 
     loop {
-        terminal.draw(|f| draw(f, &state))?;
+        terminal.draw(|f| draw(f, &mut state))?;
 
         // Idle check before polling.
         if state.mode == Mode::Unlocked && state.last_activity.elapsed() >= idle_timeout {
-            // Drop the unlocked wallet — `ZeroizeOnDrop` scrubs the seed.
             state.unlocked = None;
             state.mode = Mode::Locked;
             state.message = Some(("auto-locked (idle)".into(), MessageKind::Info));
@@ -76,40 +85,81 @@ enum MessageKind {
     Error,
 }
 
-struct LockState {
-    mode: Mode,
-    /// Password buffer. Zeroized on submit / clear.
-    password: String,
+pub(crate) struct LockState {
+    pub(crate) mode: Mode,
+    /// Single-field form — the TextFieldEditor at index 0 holds the password.
+    form: Form,
     message: Option<(String, MessageKind)>,
     unlocked: Option<UnlockedWallet>,
     last_activity: Instant,
 }
 
+fn make_password_form() -> Form {
+    Form::new().with_field(Field::SingleLineText(TextFieldEditor::with_meta(
+        FieldMeta::new("password"),
+        1,
+    )))
+}
+
 impl LockState {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             mode: Mode::Locked,
-            password: String::new(),
+            form: make_password_form(),
             message: None,
             unlocked: None,
             last_activity: Instant::now(),
         }
     }
 
-    fn clear_password(&mut self) {
-        self.password.zeroize();
+    /// Extract the password bytes, wipe the field, then attempt unlock.
+    fn submit_password(&mut self, wallet: &Wallet) {
+        let pw_text = match self.form.fields.first() {
+            Some(Field::SingleLineText(f)) => f.text(),
+            _ => String::new(),
+        };
+
+        let mut pw_bytes: Vec<u8> = pw_text.into_bytes();
+
+        match wallet.unlock(&pw_bytes) {
+            Ok(u) => {
+                self.unlocked = Some(u);
+                self.mode = Mode::Unlocked;
+                self.message = Some(("unlocked — M1 done".into(), MessageKind::Info));
+            }
+            Err(e) => {
+                self.message = Some((format!("{e}"), MessageKind::Error));
+            }
+        }
+
+        pw_bytes.zeroize();
+        self.wipe_field();
+    }
+
+    /// Rebuild the form field to an empty state, zeroizing any backing memory.
+    fn wipe_field(&mut self) {
+        // set_text("") rebuilds the inner Editor with a fresh empty Buffer,
+        // dropping the previous one. The previous String allocation is freed by
+        // Rust's normal drop; the Buffer rope's internal Vec is also dropped.
+        if let Some(Field::SingleLineText(f)) = self.form.fields.first_mut() {
+            f.set_text("");
+        }
     }
 }
 
 impl Drop for LockState {
     fn drop(&mut self) {
-        self.clear_password();
+        self.wipe_field();
         // unlocked: ZeroizeOnDrop runs automatically.
     }
 }
 
-fn handle_key(state: &mut LockState, wallet: &Wallet, k: KeyEvent) -> Option<Outcome> {
-    // Ctrl-C / Ctrl-D quits from anywhere.
+fn handle_key(
+    state: &mut LockState,
+    wallet: &Wallet,
+    k: crossterm::event::KeyEvent,
+) -> Option<Outcome> {
+    // Ctrl-C / Ctrl-D quit from anywhere.
     if k.modifiers.contains(KeyModifiers::CONTROL)
         && matches!(k.code, KeyCode::Char('c') | KeyCode::Char('d'))
     {
@@ -117,48 +167,37 @@ fn handle_key(state: &mut LockState, wallet: &Wallet, k: KeyEvent) -> Option<Out
     }
 
     match state.mode {
-        Mode::Locked => match k.code {
-            KeyCode::Esc => return Some(Outcome::Quit),
-            KeyCode::Enter => {
-                let pw = state.password.as_bytes().to_vec();
-                match wallet.unlock(&pw) {
-                    Ok(u) => {
-                        state.unlocked = Some(u);
-                        state.mode = Mode::Unlocked;
-                        state.message = Some(("unlocked — M1 done".into(), MessageKind::Info));
-                    }
-                    Err(e) => {
-                        state.message = Some((format!("{e}"), MessageKind::Error));
-                    }
-                }
-                state.clear_password();
-                let mut zeroed = pw;
-                zeroed.zeroize();
+        Mode::Locked => {
+            // Enter submits regardless of form mode.
+            if k.code == KeyCode::Enter {
+                state.submit_password(wallet);
+                return None;
             }
-            KeyCode::Backspace => {
-                state.password.pop();
+
+            // Esc in Normal mode quits; in Insert mode let the form handle it
+            // (it will return to Normal).
+            if k.code == KeyCode::Esc && state.form.mode == FormMode::Normal {
+                return Some(Outcome::Quit);
             }
-            // Ignore other ctrl-modified chars.
-            KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
-                state.password.push(c);
+
+            state.form.handle_input(Input::from(k));
+            None
+        }
+        Mode::Unlocked => {
+            if matches!(k.code, KeyCode::Char('q') | KeyCode::Esc) {
+                return Some(Outcome::Quit);
             }
-            _ => {}
-        },
-        Mode::Unlocked => match k.code {
-            KeyCode::Char('q') | KeyCode::Esc => return Some(Outcome::Quit),
-            KeyCode::Char('l') => {
-                // Manual lock.
+            if k.code == KeyCode::Char('l') {
                 state.unlocked = None;
                 state.mode = Mode::Locked;
                 state.message = Some(("locked".into(), MessageKind::Info));
             }
-            _ => {}
-        },
+            None
+        }
     }
-    None
 }
 
-fn draw(f: &mut ratatui::Frame, state: &LockState) {
+fn draw(f: &mut ratatui::Frame, state: &mut LockState) {
     let area = f.area();
     match state.mode {
         Mode::Locked => draw_locked(f, area, state),
@@ -166,7 +205,7 @@ fn draw(f: &mut ratatui::Frame, state: &LockState) {
     }
 }
 
-fn draw_locked(f: &mut ratatui::Frame, area: Rect, state: &LockState) {
+fn draw_locked(f: &mut ratatui::Frame, area: Rect, state: &mut LockState) {
     let block = Block::default()
         .title(" hodl • LOCKED ")
         .borders(Borders::ALL)
@@ -194,9 +233,24 @@ fn draw_locked(f: &mut ratatui::Frame, area: Rect, state: &LockState) {
     .alignment(Alignment::Center);
     f.render_widget(banner, chunks[0]);
 
-    let masked: String = "*".repeat(state.password.chars().count());
-    let prompt = Paragraph::new(Line::from(vec![Span::raw("password: "), Span::raw(masked)]))
-        .block(Block::default().borders(Borders::ALL));
+    // Render the password field masked. The form drives vim-modal input;
+    // we read char count and display asterisks instead of plain text.
+    let char_count = match state.form.fields.first() {
+        Some(Field::SingleLineText(field)) => field.text().chars().count(),
+        _ => 0,
+    };
+    let mode_indicator = if state.form.mode == FormMode::Insert {
+        "-- INSERT --  "
+    } else {
+        ""
+    };
+    let masked = "*".repeat(char_count);
+    let prompt = Paragraph::new(Line::from(vec![
+        Span::styled(mode_indicator, Style::default().fg(Color::Yellow)),
+        Span::raw("password: "),
+        Span::raw(masked),
+    ]))
+    .block(Block::default().borders(Borders::ALL));
     f.render_widget(prompt, chunks[1]);
 
     if let Some((msg, kind)) = &state.message {
@@ -210,7 +264,7 @@ fn draw_locked(f: &mut ratatui::Frame, area: Rect, state: &LockState) {
     }
 
     let hint = Paragraph::new(Line::from(Span::styled(
-        "enter to submit • esc to quit",
+        "i to type • enter to submit • esc to quit",
         Style::default().fg(Color::DarkGray),
     )))
     .alignment(Alignment::Center);
@@ -248,4 +302,89 @@ fn draw_unlocked(f: &mut ratatui::Frame, area: Rect, state: &LockState) {
     ];
     let body = Paragraph::new(lines).alignment(Alignment::Center);
     f.render_widget(body, inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hjkl_form::Key;
+    use hodl_wallet::{Wallet, vault::KdfParams};
+    use tempfile::TempDir;
+
+    fn test_wallet(dir: &TempDir) -> Wallet {
+        Wallet::create(
+            dir.path(),
+            "test",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "",
+            b"correct-password",
+            KdfParams::testing(),
+        )
+        .unwrap()
+    }
+
+    fn ki(c: char) -> Input {
+        Input {
+            key: Key::Char(c),
+            ..Input::default()
+        }
+    }
+
+    fn special(k: Key) -> Input {
+        Input {
+            key: k,
+            ..Input::default()
+        }
+    }
+
+    /// Type a string into the form via Insert mode.
+    fn type_password(state: &mut LockState, password: &str) {
+        state.form.handle_input(ki('i')); // enter Insert
+        for c in password.chars() {
+            state.form.handle_input(ki(c));
+        }
+        state.form.handle_input(special(Key::Esc)); // back to Normal
+    }
+
+    #[test]
+    fn wrong_password_stays_locked() {
+        let dir = TempDir::new().unwrap();
+        let wallet = test_wallet(&dir);
+        let mut state = LockState::new();
+
+        type_password(&mut state, "wrong-password");
+        state.submit_password(&wallet);
+
+        assert_eq!(state.mode, Mode::Locked);
+        assert!(matches!(&state.message, Some((_, MessageKind::Error))));
+    }
+
+    #[test]
+    fn correct_password_unlocks() {
+        let dir = TempDir::new().unwrap();
+        let wallet = test_wallet(&dir);
+        let mut state = LockState::new();
+
+        type_password(&mut state, "correct-password");
+        state.submit_password(&wallet);
+
+        assert_eq!(state.mode, Mode::Unlocked);
+        assert!(state.unlocked.is_some());
+    }
+
+    #[test]
+    fn field_cleared_after_failed_unlock() {
+        let dir = TempDir::new().unwrap();
+        let wallet = test_wallet(&dir);
+        let mut state = LockState::new();
+
+        type_password(&mut state, "wrong-password");
+        state.submit_password(&wallet);
+
+        let text = match state.form.fields.first() {
+            Some(Field::SingleLineText(f)) => f.text(),
+            _ => panic!("expected text field"),
+        };
+        assert!(text.is_empty(), "field must be empty after failed unlock");
+    }
 }
