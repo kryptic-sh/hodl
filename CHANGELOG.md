@@ -10,6 +10,14 @@ and this project adheres to
 
 ### Added
 
+- New crate `hodl-chain-bitcoin`: Electrum 1.4 client (TCP + TLS), BIP-44 / 49 /
+  84 / 86 address derivation (P2PKH, P2SH-P2WPKH, P2WPKH bech32, P2TR bech32m),
+  gap-limit scan, balance + history read path. `BitcoinChain` implements
+  `hodl_core::Chain` for the read path; `build_tx` / `sign` / `broadcast` return
+  `Error::Chain("not implemented")` until PE (M3 send).
+- Network constants: `NetworkParams::BITCOIN_MAINNET` and `BITCOIN_TESTNET`.
+  Other Bitcoin-derivative chains (LTC, DOGE, BCH, BSV, XEC, Navio) drop in as
+  additional `NetworkParams` records in PH / PJ.
 - `hodl-core` types: `ChainId`, `Address`, `Amount`, `FeeRate`, `TxId`, `TxRef`,
   `SendParams`, `UnsignedTx`, `SignedTx`, `PrivateKeyBytes` (Zeroize), and the
   `Chain` trait per `PLAN.md`. Replaces the M1 stub.
