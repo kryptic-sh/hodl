@@ -103,6 +103,11 @@ Native 25-word Monero seeds may be supported as a separate import path post-v1.
               v
 +-------------------------------+
 | hodl-tui (ratatui screens)    |   onboarding, accounts, send, receive, settings
+|   uses hjkl-form (modal       |   vim-modal text fields (password, amount,
+|        text fields)           |   recipient, mnemonic, passphrase)
+|   uses hjkl-picker (fuzzy)    |   wallet / account / chain / endpoint pickers
+|   uses hjkl-clipboard         |   yank address (OSC 52 for SSH), paste recipient
+|   uses hjkl-ratatui           |   Style intern + KeyEvent bridge
 +-------------------------------+
               |
               v
@@ -121,9 +126,34 @@ Native 25-word Monero seeds may be supported as a separate import path post-v1.
               v
 +-------------------------------+
 | hodl-core                     |   shared types, errors, units, fee model
-| hodl-config                   |   TOML loader, endpoint registry
+| hodl-config (uses hjkl-config)|   XDG path resolution + TOML endpoint registry
 +-------------------------------+
 ```
+
+### hjkl crate adoption
+
+The hjkl modal-editor stack ships several reusable crates we already half-adopt;
+pulling more of them eliminates parallel implementations and gives `hodl` the
+same vim-modal feel as `sqeel` and `buffr`.
+
+| Crate            | Pin   | Adopted in | Replaces / enables                                                                                                                                                                                                                                                                              |
+| ---------------- | ----- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hjkl-config`    | `0.2` | M1 (done)  | XDG `data_dir("hodl")` for vault path. Extend in M2 for endpoint registry, lock timeout, Tor toggle.                                                                                                                                                                                            |
+| `hjkl-form`      | `0.3` | M2         | Modal-vim forms (`Form-Normal` / `Form-Insert`). Each `TextFieldEditor` hosts a full `hjkl-engine::Editor`, so every field gets the full vim grammar (motions, operators, registers, counts). `SelectField` + `CheckboxField` + `SubmitField` + `Validator` cover the rest of the form surface. |
+| `hjkl-picker`    | `0.3` | M2         | Wallet switcher, chain picker, account picker, address-book picker, endpoint picker.                                                                                                                                                                                                            |
+| `hjkl-clipboard` | `0.4` | M2 receive | OSC 52 SSH-safe clipboard for "yank address"; paste recipient on send.                                                                                                                                                                                                                          |
+| `hjkl-ratatui`   | `0.3` | M2         | `Style` intern + `KeyEvent` bridge so we share theming / input shape with sqeel and buffr.                                                                                                                                                                                                      |
+| `hjkl-engine`    | —     | transitive | Pulled by `hjkl-form` / `hjkl-picker`; gives modal FSM under the text fields.                                                                                                                                                                                                                   |
+| `hjkl-buffer`    | —     | transitive | Rope buffer underneath the form fields.                                                                                                                                                                                                                                                         |
+| `hjkl-bonsai`    | —     | N/A        | Tree-sitter syntax; no use in a wallet TUI.                                                                                                                                                                                                                                                     |
+| `hjkl-editor`    | —     | N/A        | Full modal editor; overkill for fixed-shape wallet forms.                                                                                                                                                                                                                                       |
+
+All hjkl crates are consumed from **crates.io** at the pins above — no
+`[patch.crates-io]` block, no git submodules. `hodl` tracks released hjkl
+versions only; if the wallet needs an upstream change, land it in the relevant
+`hjkl-*` repo, cut a release, then bump the pin here. Mirrors how `sqeel-tui`
+consumes `hjkl-form` / `hjkl-picker` / `hjkl-clipboard` / `hjkl-ratatui` and how
+`sqeel-core` consumes `hjkl-config`.
 
 ### `Chain` trait (sketch)
 
@@ -196,18 +226,71 @@ $XDG_DATA_HOME/hodl/
 
 ## TUI Surfaces
 
-1. **Onboarding** — create new (12 / 24 word picker), restore from existing
-   mnemonic, set passphrase, set vault password.
-2. **Account list** — per-chain accounts, balances, last-sync timestamp.
-3. **Receive** — address QR (terminal QR via `qrcode`), copy to clipboard,
-   derivation path display.
-4. **Send** — recipient, amount (with fiat preview from optional price feed),
-   fee selector (slow / normal / fast / custom), confirmation, broadcast.
-5. **History** — per-account tx list with confirmations, mempool state.
-6. **Settings** — endpoint overrides, Tor toggle, KDF strength, lock timeout.
-7. **Lock screen** — auto-locks after idle; vault password to unlock.
+### Modal-form principle
 
-Keymap: vim-ish (`j/k` move, `gg/G` jump, `:` command, `/` search, `q` quit).
+Every multi-field input in `hodl-tui` is a `hjkl_form::Form`. No bespoke input
+loops, no parallel keymap layer. The form FSM gives us two modes that match
+Vim's grammar exactly:
+
+- **`Form-Normal`** — `j` / `k` (or `Tab` / `S-Tab`) move focus between fields;
+  `i` / `a` enter the focused field's editor; `Enter` on a `SubmitField` runs
+  the submit fn; `:` opens an ex line for global commands (`:w`, `:q`, `:lock`);
+  `/` opens search where applicable.
+- **`Form-Insert`** — keystrokes route to the focused field's
+  `hjkl_engine::Editor`. Users get the **full vim grammar inside every text
+  field**: `h j k l`, `w / b / e`, `0 / $`, `dw / ciw / x / r`, `u / C-r`,
+  `y / p`, registers, counts. `Esc` returns to `Form-Normal`.
+
+This is not "vim-ish" — it is the same modal editor that powers `hjkl-editor`
+and `sqeel`'s query buffer. Users who already know vim get send-screen muscle
+memory for free; users who don't can stay in insert mode and treat fields like
+normal text inputs.
+
+### Field-type mapping
+
+| Field                    | hjkl-form type    | Notes                                                                                          |
+| ------------------------ | ----------------- | ---------------------------------------------------------------------------------------------- |
+| Vault password           | `TextFieldEditor` | Single-line, masked render; replaces M1's raw `String` buffer in `hodl-tui::lock`.             |
+| BIP-39 mnemonic (import) | `TextFieldEditor` | Multi-line allowed; validator checks 12 / 24 word count + checksum before submit enables.      |
+| BIP-39 passphrase        | `TextFieldEditor` | Single-line, masked.                                                                           |
+| Send recipient           | `TextFieldEditor` | Validator: per-chain address codec check (bech32 / CashAddr / EIP-55 / Monero); paste via OSC. |
+| Send amount              | `TextFieldEditor` | Validator: parses decimal in chain units, ≤ spendable balance.                                 |
+| Send fee tier            | `SelectField`     | `slow / normal / fast / custom` — `custom` reveals a `TextFieldEditor` for sat/vB or gwei.     |
+| Memo / label             | `TextFieldEditor` | Optional; per-tx note.                                                                         |
+| Tor enable               | `CheckboxField`   | Toggles SOCKS5 passthrough on all chain backends.                                              |
+| Confirm send             | `SubmitField`     | Submit fn = sign + broadcast; surfaces `SubmitOutcome` errors as field-level red text.         |
+| Word-count picker        | `SelectField`     | 12 / 24 — onboarding only.                                                                     |
+| KDF strength             | `SelectField`     | `default / hardened / paranoid` → preset Argon2id params.                                      |
+
+Validators live in `hodl-tui` and use `hjkl_form::Validator`; submit buttons
+stay disabled while any field validator returns an error, so we never hand a
+half-valid `SendParams` to the chain layer.
+
+### "Pick one of N" flows
+
+`hjkl_picker::Picker` for fuzzy lists; all clipboard operations route through
+`hjkl-clipboard` (OSC 52 fallback for SSH).
+
+1. **Onboarding** — `hjkl-form` with the word-count `SelectField`, mnemonic /
+   passphrase / password `TextFieldEditor`s, and a final `SubmitField` that
+   creates the vault.
+2. **Account list** — per-chain accounts, balances, last-sync timestamp. Wallet
+   / account switch via `hjkl-picker`.
+3. **Receive** — address QR (terminal QR via `qrcode`), yank to clipboard via
+   `hjkl-clipboard` (OSC 52 over SSH), derivation path display.
+4. **Send** — `hjkl-form` with recipient + amount `TextFieldEditor`s (paste
+   recipient via `hjkl-clipboard`), fee `SelectField`, optional memo, confirm
+   `SubmitField`. Validator gates the submit.
+5. **History** — per-account tx list with confirmations, mempool state. Tx
+   detail jump via `hjkl-picker`.
+6. **Settings** — `hjkl-form` with endpoint `SelectField` (registry) +
+   custom-URL `TextFieldEditor`, Tor `CheckboxField`, KDF `SelectField`,
+   lock-timeout `TextFieldEditor`.
+7. **Lock screen** — single-field `hjkl-form` (masked `TextFieldEditor` +
+   implicit submit on `Enter` from `Form-Normal`). Auto-locks after idle.
+
+Renderer: `hjkl_ratatui::form::draw_form` is the canonical adapter — no custom
+widget code in `hodl-tui` for form chrome.
 
 ## Milestones
 
@@ -215,7 +298,9 @@ Keymap: vim-ish (`j/k` move, `gg/G` jump, `:` command, `/` search, `q` quit).
 - **M1 — wallet core.** BIP-39 (12/24), BIP-32, encrypted vault, password
   unlock, lock-screen, Argon2id KDF, zeroize discipline. No chain support yet.
 - **M2 — Bitcoin (mainnet+testnet).** Electrum client, address derivation
-  (BIP-44/49/84/86), balance, history, gap-limit scan.
+  (BIP-44/49/84/86), balance, history, gap-limit scan. **Also:** flip `hodl-tui`
+  onto `hjkl-form` + `hjkl-picker` + `hjkl-ratatui` + `hjkl-clipboard`; retire
+  the raw-`String` password buffer in `hodl-tui::lock`.
 - **M3 — Bitcoin send.** PSBT build, fee estimation, sign, broadcast, RBF
   support.
 - **M4 — Ethereum.** JSON-RPC client, EIP-155 sign, EIP-1559 fees, send native
