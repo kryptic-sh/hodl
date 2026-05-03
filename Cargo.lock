@@ -640,7 +640,7 @@ dependencies = [
 
 [[package]]
 name = "hodl"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -655,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "hodl-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hodl-core",
  "serde",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "hodl-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "hodl-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -687,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "hodl-wallet"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argon2",
  "bip32",
@@ -1954,7 +1954,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",

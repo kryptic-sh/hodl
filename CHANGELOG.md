@@ -8,6 +8,16 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-03
+
+### Fixed
+
+- Release workflow now skips the `cargo fmt --check` and `cargo clippy` steps in
+  the build matrix — those run in CI on every push to main. The redundant Clippy
+  step was failing on `x86_64-apple-darwin` (target std issue), which prevented
+  the Intel-mac binary from being published in 0.1.0. Aligns with the canonical
+  sqeel / hjkl release.yml pattern (build-only).
+
 ## [0.1.0] - 2026-05-03
 
 ### Changed
@@ -75,7 +85,8 @@ and this project adheres to
 
 - Workspace scaffold (M0): crates, CI lint/build/test on Linux.
 
-[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/kryptic-sh/hodl/releases/tag/v0.1.1
 [0.1.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.1.0
 [0.0.2]: https://github.com/kryptic-sh/hodl/releases/tag/v0.0.2
 [0.0.1]: https://github.com/kryptic-sh/hodl/releases/tag/v0.0.1

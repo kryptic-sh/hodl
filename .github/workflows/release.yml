@@ -80,12 +80,6 @@ jobs:
         with:
           tool: cargo-zigbuild
 
-      - name: Check formatting
-        run: cargo fmt --all --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked --target ${{ matrix.target }} -- -D warnings
-
       - name: Build binary (zigbuild)
         if: matrix.glibc != ''
         run: cargo zigbuild --release --locked --target ${{ matrix.target }}.${{ matrix.glibc }} --bin hodl
