@@ -48,6 +48,26 @@ pub fn bip86_path(coin: u32, account: u32, change: u32, index: u32) -> String {
     path_str(86, coin, account, change, index)
 }
 
+/// Derive an `XPrv` from a 64-byte BIP-39 seed.
+///
+/// Returns the private extended key, from which both the signing scalar and
+/// compressed public key can be extracted.
+pub fn derive_xprv(
+    seed: &[u8; 64],
+    purpose: Purpose,
+    params: &NetworkParams,
+    account: u32,
+    change: u32,
+    index: u32,
+) -> Result<XPrv> {
+    let coin = params.chain_id.slip44();
+    let path_s = path_str(purpose.value(), coin, account, change, index);
+    let parsed: DerivationPath = path_s
+        .parse()
+        .map_err(|e: bip32::Error| Error::Chain(format!("derivation path: {e}")))?;
+    XPrv::derive_from_path(seed, &parsed).map_err(|e| Error::Chain(format!("key derivation: {e}")))
+}
+
 /// Derive an address from a 64-byte BIP-39 seed for the given purpose and
 /// network at the specified account / change / index.
 pub fn derive_address(

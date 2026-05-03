@@ -130,6 +130,31 @@ impl ElectrumClient {
             .as_f64()
             .ok_or_else(|| Error::Network("estimatefee: expected f64".into()))
     }
+
+    /// `blockchain.scripthash.listunspent` — UTXOs for a scripthash.
+    pub fn scripthash_listunspent(&mut self, scripthash: &str) -> Result<Vec<Utxo>> {
+        let result = self.call("blockchain.scripthash.listunspent", json!([scripthash]))?;
+        serde_json::from_value(result)
+            .map_err(|e| Error::Network(format!("listunspent decode: {e}")))
+    }
+
+    /// `blockchain.transaction.broadcast` — broadcast a raw hex tx. Returns txid.
+    pub fn transaction_broadcast(&mut self, raw_hex: &str) -> Result<String> {
+        let result = self.call("blockchain.transaction.broadcast", json!([raw_hex]))?;
+        result
+            .as_str()
+            .map(|s| s.to_owned())
+            .ok_or_else(|| Error::Network("broadcast: expected string txid".into()))
+    }
+
+    /// `blockchain.transaction.get` — fetch raw hex for a txid.
+    pub fn transaction_get(&mut self, tx_hash: &str) -> Result<String> {
+        let result = self.call("blockchain.transaction.get", json!([tx_hash, false]))?;
+        result
+            .as_str()
+            .map(|s| s.to_owned())
+            .ok_or_else(|| Error::Network("transaction.get: expected hex string".into()))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,6 +167,14 @@ pub struct ScriptHashBalance {
 pub struct HistoryEntry {
     pub tx_hash: String,
     pub height: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Utxo {
+    pub tx_hash: String,
+    pub tx_pos: u32,
+    pub height: i64,
+    pub value: u64,
 }
 
 /// Compute the Electrum scripthash for a P2WPKH script pubkey.
@@ -246,5 +279,36 @@ mod tests {
         // Known vector: OP_0 <20-byte zeroes> → sha256 reversed.
         let hash = p2wpkh_scripthash(&[0u8; 20]);
         assert_eq!(hash.len(), 64);
+    }
+
+    #[test]
+    fn listunspent_decode() {
+        let response = r#"{"jsonrpc":"2.0","id":1,"result":[{"tx_hash":"abcd","tx_pos":0,"height":800001,"value":50000}]}"#.to_owned() + "\n";
+        let mock = MockTransport::new(&response);
+        let mut client = ElectrumClient::from_transport(Box::new(mock));
+        let utxos = client.scripthash_listunspent("deadbeef").unwrap();
+        assert_eq!(utxos.len(), 1);
+        assert_eq!(utxos[0].tx_hash, "abcd");
+        assert_eq!(utxos[0].tx_pos, 0);
+        assert_eq!(utxos[0].height, 800_001);
+        assert_eq!(utxos[0].value, 50_000);
+    }
+
+    #[test]
+    fn transaction_broadcast_decode() {
+        let response = r#"{"jsonrpc":"2.0","id":1,"result":"deadbeefdeadbeef"}"#.to_owned() + "\n";
+        let mock = MockTransport::new(&response);
+        let mut client = ElectrumClient::from_transport(Box::new(mock));
+        let txid = client.transaction_broadcast("0100000000").unwrap();
+        assert_eq!(txid, "deadbeefdeadbeef");
+    }
+
+    #[test]
+    fn transaction_get_decode() {
+        let response = r#"{"jsonrpc":"2.0","id":1,"result":"0100000001"}"#.to_owned() + "\n";
+        let mock = MockTransport::new(&response);
+        let mut client = ElectrumClient::from_transport(Box::new(mock));
+        let raw = client.transaction_get("deadbeef").unwrap();
+        assert_eq!(raw, "0100000001");
     }
 }

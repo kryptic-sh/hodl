@@ -10,6 +10,39 @@ and this project adheres to
 
 ### Added
 
+- M3 Bitcoin send: PSBT v0 build (segwit-v0 P2WPKH inputs + outputs), greedy
+  coin selection (largest-first), BIP-143 segwit sighash (hand-rolled, ~50 lines
+  of `sha2`), k256-ECDSA signing, Electrum broadcast.
+- Send TUI screen (`hodl-tui::send`) — recipient / amount / fee tier via
+  `hjkl-form`. Fee tiers: Slow (12 blocks) / Normal (6 blocks) / Fast (2 blocks)
+  / Custom (explicit sat/vB). Pre-submit validation (bech32 P2WPKH, amount > 0,
+  amount ≤ balance). Result pane shows broadcast TxId + `mempool.space` hint URL
+  (no auto-open). `q` returns to Accounts.
+- New Electrum methods: `blockchain.scripthash.listunspent`,
+  `blockchain.transaction.broadcast`, `blockchain.transaction.get`. Mock
+  transport round-trip tests for each.
+- `BitcoinChain::derive_private_key` (implements `Chain::derive_private_key`
+  default override). `BitcoinChain::build_tx_for_address` and
+  `BitcoinChain::sign_with_keys` as chain-specific methods for multi-input UTXO
+  signing. `BitcoinChain::listunspent` public helper for UTXO fetch.
+
+### Changed
+
+- `Chain` trait gains `derive_private_key(seed, account, change, index)` with
+  default impl that returns `Err`; `BitcoinChain` overrides. Ethereum-style
+  single-sender chains leave the default.
+- Account screen rebinds settings from `s` to `S`; `s` now opens Send for the
+  focused address. Hint bar updated. `AccountAction::OpenSend` variant added.
+- `bech32` added to `hodl-tui` workspace dependencies (needed for send-screen
+  recipient validator).
+
+### Deferred (future work)
+
+- Legacy / wrapped-segwit (P2PKH, P2SH-P2WPKH) input signing.
+- RBF flag / explicit fee bumping.
+- Multi-address UTXO aggregation (send currently uses single source address).
+- Real-network integration tests (all tests use mock Electrum transport).
+
 - M2 TUI surfaces: onboarding (create + restore), accounts list, receive (QR +
   OSC-52 clipboard yank), settings — all built on `hjkl-form` (modal vim grammar
   inside every field) and `hjkl-picker` (chain / endpoint switchers).

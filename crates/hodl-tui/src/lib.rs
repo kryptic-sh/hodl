@@ -10,6 +10,7 @@ pub mod clipboard;
 pub mod lock;
 pub mod onboarding;
 pub mod receive;
+pub mod send;
 pub mod settings;
 
 use std::path::PathBuf;

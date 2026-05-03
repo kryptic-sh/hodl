@@ -20,6 +20,7 @@ use crate::clipboard::ClipboardHandle;
 use crate::lock::{self, Outcome as LockOutcome};
 use crate::onboarding::{self, OnboardingMode, OnboardingOutcome, OnboardingState};
 use crate::receive::{self, ReceiveAction, ReceiveState};
+use crate::send::{self, SendAction, SendState};
 use crate::settings::{self, SettingsAction, SettingsState};
 
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -31,6 +32,7 @@ enum Screen {
     Onboarding(Box<OnboardingState>),
     Accounts(Box<AccountState>),
     Receive(ReceiveState),
+    Send(Box<SendState>),
     Settings,
 }
 
@@ -186,6 +188,23 @@ impl App {
                             let path = "m/84'/0'/0'/0/0".to_string();
                             self.screen = Screen::Receive(ReceiveState::new(addr, path));
                         }
+                        Some(AccountAction::OpenSend {
+                            address,
+                            account,
+                            change_branch,
+                            index,
+                            balance_sats,
+                        }) => {
+                            let send_state = SendState::new(
+                                address,
+                                account,
+                                change_branch,
+                                index,
+                                balance_sats,
+                                self.config.clone(),
+                            );
+                            self.screen = Screen::Send(Box::new(send_state));
+                        }
                         Some(AccountAction::OpenSettings) => {
                             self.screen = Screen::Settings;
                         }
@@ -243,6 +262,28 @@ impl App {
                                     receive::draw(f, f.area(), s);
                                 }
                             })?;
+                        }
+                    }
+                }
+                Screen::Send(_) => {
+                    let unlocked = match &self.unlocked {
+                        Some(u) => u,
+                        None => {
+                            self.do_lock();
+                            continue;
+                        }
+                    };
+                    let send_state = match &mut self.screen {
+                        Screen::Send(s) => s,
+                        _ => unreachable!(),
+                    };
+                    match send::event_loop(terminal, send_state, unlocked)? {
+                        SendAction::Back | SendAction::Quit => {
+                            let mut acc_state = self.make_accounts();
+                            if let Some(unlocked) = &self.unlocked {
+                                acc_state.load_accounts(unlocked);
+                            }
+                            self.screen = Screen::Accounts(Box::new(acc_state));
                         }
                     }
                 }

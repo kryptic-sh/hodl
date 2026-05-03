@@ -40,4 +40,20 @@ pub trait Chain {
     fn build_tx(&self, params: crate::tx::SendParams) -> Result<UnsignedTx>;
     fn sign(&self, tx: UnsignedTx, key: &PrivateKeyBytes) -> Result<SignedTx>;
     fn broadcast(&self, tx: SignedTx) -> Result<TxId>;
+
+    /// Derive the private key for a given account/change/index path.
+    ///
+    /// Default impl returns an error; override in chain crates that support it
+    /// (Bitcoin). Ethereum-style single-sender chains can leave this as is.
+    fn derive_private_key(
+        &self,
+        _seed: &[u8; 64],
+        _account: u32,
+        _change: u32,
+        _index: u32,
+    ) -> Result<PrivateKeyBytes> {
+        Err(crate::error::Error::Chain(
+            "derive_private_key not implemented for this chain".into(),
+        ))
+    }
 }

@@ -1105,6 +1105,7 @@ name = "hodl-tui"
 version = "0.1.2"
 dependencies = [
  "anyhow",
+ "bech32",
  "crossterm",
  "hjkl-clipboard",
  "hjkl-form",

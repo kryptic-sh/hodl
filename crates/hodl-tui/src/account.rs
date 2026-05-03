@@ -28,6 +28,14 @@ use hodl_wallet::UnlockedWallet;
 pub enum AccountAction {
     /// Navigate to the receive screen for the given address.
     OpenReceive(Address),
+    /// Navigate to the send screen for the given address + derivation index.
+    OpenSend {
+        address: Address,
+        account: u32,
+        change_branch: u32,
+        index: u32,
+        balance_sats: u64,
+    },
     /// Navigate to the settings screen.
     OpenSettings,
     /// Lock the wallet (return to lock screen).
@@ -198,7 +206,21 @@ impl AccountState {
                     return Some(AccountAction::OpenReceive(addr));
                 }
             }
-            KeyCode::Char('s') => return Some(AccountAction::OpenSettings),
+            KeyCode::Char('s') => {
+                if let Some(idx) = self.table_state.selected()
+                    && let Some(row) = self.rows.get(idx)
+                {
+                    let balance_sats = row.balance.as_ref().map(|b| b.atoms() as u64).unwrap_or(0);
+                    return Some(AccountAction::OpenSend {
+                        address: row.address.clone(),
+                        account: 0,
+                        change_branch: 0,
+                        index: row.index,
+                        balance_sats,
+                    });
+                }
+            }
+            KeyCode::Char('S') => return Some(AccountAction::OpenSettings),
             KeyCode::Char('p') => self.open_picker(),
             KeyCode::Char('q') | KeyCode::Esc => return Some(AccountAction::Lock),
             _ => {}
@@ -280,7 +302,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
     }
 
     let hint = Paragraph::new(Line::from(Span::styled(
-        "j/k move • r receive • s settings • p picker • q lock",
+        "j/k move • r receive • s send • S settings • p picker • q lock",
         Style::default().fg(Color::DarkGray),
     )))
     .alignment(Alignment::Center);

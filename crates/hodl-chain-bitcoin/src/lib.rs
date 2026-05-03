@@ -3,6 +3,7 @@ pub mod chain;
 pub mod derive;
 pub mod electrum;
 pub mod network;
+pub mod psbt;
 pub mod scan;
 
 pub use chain::BitcoinChain;
