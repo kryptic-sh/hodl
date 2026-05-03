@@ -36,6 +36,8 @@ pub enum AccountAction {
         index: u32,
         balance_sats: u64,
     },
+    /// Navigate to the address book screen.
+    OpenAddressBook,
     /// Navigate to the settings screen.
     OpenSettings,
     /// Lock the wallet (return to lock screen).
@@ -96,7 +98,13 @@ impl AccountState {
 
         debug!("connecting to Electrum: {endpoint_url}");
 
-        let electrum = match electrum_connect(&endpoint_url) {
+        let proxy = if self.config.tor.enabled {
+            Some(self.config.tor.socks5.clone())
+        } else {
+            None
+        };
+
+        let electrum = match electrum_connect(&endpoint_url, proxy.as_deref()) {
             Ok(c) => c,
             Err(e) => {
                 self.flash = Some(format!("Electrum connect failed: {e}"));
@@ -220,6 +228,7 @@ impl AccountState {
                     });
                 }
             }
+            KeyCode::Char('b') => return Some(AccountAction::OpenAddressBook),
             KeyCode::Char('S') => return Some(AccountAction::OpenSettings),
             KeyCode::Char('p') => self.open_picker(),
             KeyCode::Char('q') | KeyCode::Esc => return Some(AccountAction::Lock),
@@ -302,7 +311,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
     }
 
     let hint = Paragraph::new(Line::from(Span::styled(
-        "j/k move • r receive • s send • S settings • p picker • q lock",
+        "j/k move • r receive • s send • b book • S settings • p picker • q lock",
         Style::default().fg(Color::DarkGray),
     )))
     .alignment(Alignment::Center);
@@ -422,7 +431,12 @@ impl PickerLogic for ChainPickerSource {
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /// Connect to an Electrum server from a URL like `ssl://host:60002` or `tcp://host:50001`.
-fn electrum_connect(url: &str) -> hodl_core::Result<hodl_chain_bitcoin::electrum::ElectrumClient> {
+///
+/// If `proxy` is `Some("socks5://host:port")`, routes the connection through SOCKS5.
+fn electrum_connect(
+    url: &str,
+    proxy: Option<&str>,
+) -> hodl_core::Result<hodl_chain_bitcoin::electrum::ElectrumClient> {
     use hodl_chain_bitcoin::electrum::ElectrumClient;
     use hodl_core::error::Error;
 
@@ -436,9 +450,11 @@ fn electrum_connect(url: &str) -> hodl_core::Result<hodl_chain_bitcoin::electrum
         .parse()
         .map_err(|_| Error::Network(format!("invalid port in Electrum URL: {url}")))?;
 
-    match scheme {
-        "ssl" | "tls" => ElectrumClient::connect_tls(host, port),
-        _ => ElectrumClient::connect_tcp(host, port),
+    match (scheme, proxy) {
+        ("ssl" | "tls", Some(p)) => ElectrumClient::connect_tls_via_socks5(host, port, p),
+        ("ssl" | "tls", None) => ElectrumClient::connect_tls(host, port),
+        (_, Some(p)) => ElectrumClient::connect_tcp_via_socks5(host, port, p),
+        (_, None) => ElectrumClient::connect_tcp(host, port),
     }
 }
 

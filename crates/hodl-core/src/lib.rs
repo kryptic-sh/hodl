@@ -6,6 +6,7 @@ pub mod chain;
 pub mod chain_trait;
 pub mod error;
 pub mod fee;
+pub mod proxy;
 pub mod tx;
 
 pub use address::Address;

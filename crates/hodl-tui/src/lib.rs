@@ -5,6 +5,7 @@
 //! `hjkl-form` + `hjkl-picker` + `hjkl-clipboard`.
 
 pub mod account;
+pub mod address_book;
 pub mod app;
 pub mod clipboard;
 pub mod lock;
@@ -28,31 +29,31 @@ pub use app::DEFAULT_IDLE_TIMEOUT;
 
 /// Run the lock-screen TUI against an existing vault.
 ///
-/// If the vault exists, starts at the lock screen. Transitions to the
-/// account screen on successful unlock.
+/// Idle timeout is read from `Config.lock.idle_timeout_secs` at startup.
 pub fn run(data_root: PathBuf, wallet_name: String) -> Result<()> {
-    run_with_timeout(data_root, wallet_name, DEFAULT_IDLE_TIMEOUT)
+    let mut app = app::App::new_unlock(data_root, wallet_name)?;
+    with_terminal(|terminal| app.run(terminal))
 }
 
-/// Same as [`run`] but with a configurable idle timeout.
+/// Same as [`run`] but overrides the idle timeout (used in tests).
 pub fn run_with_timeout(
     data_root: PathBuf,
     wallet_name: String,
     idle_timeout: Duration,
 ) -> Result<()> {
-    let mut app = app::App::new_unlock(data_root, wallet_name, idle_timeout)?;
+    let mut app = app::App::new_unlock_with_timeout(data_root, wallet_name, idle_timeout)?;
     with_terminal(|terminal| app.run(terminal))
 }
 
 /// Run the create-wallet onboarding TUI, then drop into the lock screen.
 pub fn run_create(data_root: PathBuf, wallet_name: String) -> Result<()> {
-    let mut app = app::App::new_create(data_root, wallet_name, DEFAULT_IDLE_TIMEOUT)?;
+    let mut app = app::App::new_create(data_root, wallet_name)?;
     with_terminal(|terminal| app.run(terminal))
 }
 
 /// Run the restore-wallet onboarding TUI, then drop into the lock screen.
 pub fn run_restore(data_root: PathBuf, wallet_name: String) -> Result<()> {
-    let mut app = app::App::new_restore(data_root, wallet_name, DEFAULT_IDLE_TIMEOUT)?;
+    let mut app = app::App::new_restore(data_root, wallet_name)?;
     with_terminal(|terminal| app.run(terminal))
 }
 

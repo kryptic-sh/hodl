@@ -3,6 +3,7 @@ use std::net::TcpStream;
 use std::sync::Arc;
 
 use hodl_core::error::{Error, Result};
+use hodl_core::proxy::parse_socks5_url;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -35,6 +36,43 @@ impl ElectrumClient {
         let stream = TcpStream::connect((host, port))
             .map_err(|e| Error::Network(format!("TCP connect {host}:{port}: {e}")))?;
         Ok(Self::from_transport(Box::new(stream)))
+    }
+
+    /// Open a plain TCP connection through a SOCKS5 proxy.
+    ///
+    /// `proxy_url` — `socks5://host:port`.
+    pub fn connect_tcp_via_socks5(host: &str, port: u16, proxy_url: &str) -> Result<Self> {
+        let (proxy_host, proxy_port) = parse_socks5_url(proxy_url)?;
+        let stream = socks::Socks5Stream::connect((proxy_host.as_str(), proxy_port), (host, port))
+            .map_err(|e| Error::Network(format!("SOCKS5 connect {host}:{port}: {e}")))?;
+        Ok(Self::from_transport(Box::new(stream.into_inner())))
+    }
+
+    /// Open a TLS connection through a SOCKS5 proxy.
+    ///
+    /// SOCKS5 dials the tunnel, then rustls performs the TLS handshake over it.
+    /// `proxy_url` — `socks5://host:port`.
+    pub fn connect_tls_via_socks5(host: &str, port: u16, proxy_url: &str) -> Result<Self> {
+        use rustls::pki_types::ServerName;
+        use rustls::{ClientConfig, ClientConnection};
+
+        let (proxy_host, proxy_port) = parse_socks5_url(proxy_url)?;
+        let stream = socks::Socks5Stream::connect((proxy_host.as_str(), proxy_port), (host, port))
+            .map_err(|e| Error::Network(format!("SOCKS5 connect {host}:{port}: {e}")))?;
+        let tcp = stream.into_inner();
+
+        let roots = webpki_roots::TLS_SERVER_ROOTS.to_vec();
+        let root_store = rustls::RootCertStore { roots };
+        let config = ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+        let config = Arc::new(config);
+        let server_name = ServerName::try_from(host.to_owned())
+            .map_err(|e| Error::Network(format!("invalid TLS server name {host}: {e}")))?;
+        let conn = ClientConnection::new(config, server_name)
+            .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+        let tls = rustls::StreamOwned::new(conn, tcp);
+        Ok(Self::from_transport(Box::new(tls)))
     }
 
     /// Open a TLS connection using rustls with the system/webpki root store.

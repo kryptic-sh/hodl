@@ -12,10 +12,11 @@ use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 
-use hodl_config::Config;
+use hodl_config::{AddressBook, Config};
 use hodl_wallet::{UnlockedWallet, Wallet};
 
 use crate::account::{self, AccountAction, AccountState};
+use crate::address_book::{self, AddressBookAction, AddressBookState};
 use crate::clipboard::ClipboardHandle;
 use crate::lock::{self, Outcome as LockOutcome};
 use crate::onboarding::{self, OnboardingMode, OnboardingOutcome, OnboardingState};
@@ -23,6 +24,7 @@ use crate::receive::{self, ReceiveAction, ReceiveState};
 use crate::send::{self, SendAction, SendState};
 use crate::settings::{self, SettingsAction, SettingsState};
 
+/// Fallback idle timeout when the config cannot be loaded.
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 // Box large variants to keep the enum footprint smaller.
@@ -31,6 +33,7 @@ enum Screen {
     Lock,
     Onboarding(Box<OnboardingState>),
     Accounts(Box<AccountState>),
+    AddressBook(Box<AddressBookState>),
     Receive(ReceiveState),
     Send(Box<SendState>),
     Settings,
@@ -42,13 +45,67 @@ pub struct App {
     unlocked: Option<UnlockedWallet>,
     config: Config,
     screen: Screen,
+    /// Derived from `config.lock.idle_timeout_secs` at construction time.
     idle_timeout: Duration,
     last_activity: Instant,
     clipboard: ClipboardHandle,
 }
 
 impl App {
-    pub fn new_unlock(
+    pub fn new_unlock(data_root: PathBuf, wallet_name: String) -> Result<Self> {
+        let wallet = Wallet::open(&data_root, &wallet_name)?;
+        let config = load_config(&data_root);
+        let idle_timeout = idle_timeout_from_config(&config);
+        let clipboard = ClipboardHandle::new()?;
+        Ok(Self {
+            data_root,
+            wallet: Some(wallet),
+            unlocked: None,
+            config,
+            screen: Screen::Lock,
+            idle_timeout,
+            last_activity: Instant::now(),
+            clipboard,
+        })
+    }
+
+    pub fn new_create(data_root: PathBuf, wallet_name: String) -> Result<Self> {
+        let config = load_config(&data_root);
+        let idle_timeout = idle_timeout_from_config(&config);
+        let clipboard = ClipboardHandle::new()?;
+        let ob_state = OnboardingState::new(OnboardingMode::Create, data_root.clone(), wallet_name);
+        Ok(Self {
+            data_root,
+            wallet: None,
+            unlocked: None,
+            config,
+            screen: Screen::Onboarding(Box::new(ob_state)),
+            idle_timeout,
+            last_activity: Instant::now(),
+            clipboard,
+        })
+    }
+
+    pub fn new_restore(data_root: PathBuf, wallet_name: String) -> Result<Self> {
+        let config = load_config(&data_root);
+        let idle_timeout = idle_timeout_from_config(&config);
+        let clipboard = ClipboardHandle::new()?;
+        let ob_state =
+            OnboardingState::new(OnboardingMode::Restore, data_root.clone(), wallet_name);
+        Ok(Self {
+            data_root,
+            wallet: None,
+            unlocked: None,
+            config,
+            screen: Screen::Onboarding(Box::new(ob_state)),
+            idle_timeout,
+            last_activity: Instant::now(),
+            clipboard,
+        })
+    }
+
+    /// Kept for tests — accepts an explicit timeout, bypasses config.
+    pub fn new_unlock_with_timeout(
         data_root: PathBuf,
         wallet_name: String,
         idle_timeout: Duration,
@@ -68,47 +125,6 @@ impl App {
         })
     }
 
-    pub fn new_create(
-        data_root: PathBuf,
-        wallet_name: String,
-        idle_timeout: Duration,
-    ) -> Result<Self> {
-        let config = load_config(&data_root);
-        let clipboard = ClipboardHandle::new()?;
-        let ob_state = OnboardingState::new(OnboardingMode::Create, data_root.clone(), wallet_name);
-        Ok(Self {
-            data_root,
-            wallet: None,
-            unlocked: None,
-            config,
-            screen: Screen::Onboarding(Box::new(ob_state)),
-            idle_timeout,
-            last_activity: Instant::now(),
-            clipboard,
-        })
-    }
-
-    pub fn new_restore(
-        data_root: PathBuf,
-        wallet_name: String,
-        idle_timeout: Duration,
-    ) -> Result<Self> {
-        let config = load_config(&data_root);
-        let clipboard = ClipboardHandle::new()?;
-        let ob_state =
-            OnboardingState::new(OnboardingMode::Restore, data_root.clone(), wallet_name);
-        Ok(Self {
-            data_root,
-            wallet: None,
-            unlocked: None,
-            config,
-            screen: Screen::Onboarding(Box::new(ob_state)),
-            idle_timeout,
-            last_activity: Instant::now(),
-            clipboard,
-        })
-    }
-
     pub fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()>
     where
         B::Error: Send + Sync + 'static,
@@ -120,9 +136,25 @@ impl App {
                         Some(w) => w,
                         None => return Ok(()),
                     };
-                    match lock::event_loop(terminal, wallet, self.idle_timeout)? {
+                    match lock::event_loop(terminal, wallet, self.idle_timeout, &self.data_root)? {
                         LockOutcome::Quit => return Ok(()),
                         LockOutcome::AutoLocked => continue,
+                        LockOutcome::SwitchWallet(name) => {
+                            // Re-lock: discard current unlocked state, load the new vault.
+                            self.unlocked = None;
+                            match Wallet::open(&self.data_root, &name) {
+                                Ok(w) => {
+                                    self.wallet = Some(w);
+                                    self.screen = Screen::Lock;
+                                }
+                                Err(e) => {
+                                    // Fall back to original wallet; lock screen will display
+                                    // nothing special, so just log and continue.
+                                    tracing::warn!("switch wallet failed: {e}");
+                                }
+                            }
+                            continue;
+                        }
                         LockOutcome::Unlocked(u) => {
                             self.unlocked = Some(u);
                             let mut acc_state = self.make_accounts();
@@ -184,6 +216,13 @@ impl App {
                     match action {
                         Some(AccountAction::Lock) => self.do_lock(),
                         Some(AccountAction::Quit) => return Ok(()),
+                        Some(AccountAction::OpenAddressBook) => {
+                            let book_path = AddressBook::default_path()
+                                .unwrap_or_else(|_| self.data_root.join("address_book.toml"));
+                            let book = AddressBook::load(&book_path).unwrap_or_default();
+                            let ab_state = AddressBookState::new(book, book_path);
+                            self.screen = Screen::AddressBook(Box::new(ab_state));
+                        }
                         Some(AccountAction::OpenReceive(addr)) => {
                             let path = "m/84'/0'/0'/0/0".to_string();
                             self.screen = Screen::Receive(ReceiveState::new(addr, path));
@@ -212,6 +251,54 @@ impl App {
                             terminal.draw(|f| {
                                 if let Screen::Accounts(s) = &mut self.screen {
                                     account::draw(f, f.area(), s);
+                                }
+                            })?;
+                        }
+                    }
+                }
+                Screen::AddressBook(_) => {
+                    if !event::poll(Duration::from_millis(250))? {
+                        terminal.draw(|f| {
+                            if let Screen::AddressBook(s) = &mut self.screen {
+                                address_book::draw(f, f.area(), s);
+                            }
+                        })?;
+                        continue;
+                    }
+
+                    let ev = event::read()?;
+                    if matches!(&ev, Event::Key(k) if k.kind == KeyEventKind::Press) {
+                        self.last_activity = Instant::now();
+                    }
+
+                    let action = match &mut self.screen {
+                        Screen::AddressBook(s) => {
+                            if let Event::Key(k) = ev {
+                                if k.kind == KeyEventKind::Press {
+                                    s.handle_key(k)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+
+                    match action {
+                        Some(AddressBookAction::Close) => {
+                            let mut acc_state = self.make_accounts();
+                            if let Some(unlocked) = &self.unlocked {
+                                acc_state.load_accounts(unlocked);
+                            }
+                            self.screen = Screen::Accounts(Box::new(acc_state));
+                        }
+                        Some(AddressBookAction::Quit) => return Ok(()),
+                        None => {
+                            terminal.draw(|f| {
+                                if let Screen::AddressBook(s) = &mut self.screen {
+                                    address_book::draw(f, f.area(), s);
                                 }
                             })?;
                         }
@@ -295,6 +382,8 @@ impl App {
                     match settings::event_loop(terminal, &mut settings_state, &self.config)? {
                         SettingsAction::Saved(new_cfg) => {
                             self.config = new_cfg;
+                            // Re-derive the idle timeout from the updated config.
+                            self.idle_timeout = idle_timeout_from_config(&self.config);
                             let mut acc_state = self.make_accounts();
                             if let Some(unlocked) = &self.unlocked {
                                 acc_state.load_accounts(unlocked);
@@ -329,4 +418,14 @@ impl App {
 fn load_config(data_root: &Path) -> Config {
     let path = Config::default_path().unwrap_or_else(|_| data_root.join("config.toml"));
     Config::load(&path).unwrap_or_default()
+}
+
+/// Derive idle timeout from config. Falls back to `DEFAULT_IDLE_TIMEOUT`.
+fn idle_timeout_from_config(config: &Config) -> Duration {
+    let secs = config.lock.idle_timeout_secs;
+    if secs == 0 {
+        DEFAULT_IDLE_TIMEOUT
+    } else {
+        Duration::from_secs(secs)
+    }
 }

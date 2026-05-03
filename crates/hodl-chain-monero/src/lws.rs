@@ -52,6 +52,17 @@ impl LwsClient {
         }
     }
 
+    /// Build with a SOCKS5 proxy (e.g., Tor: `socks5://127.0.0.1:9050`).
+    pub fn with_socks5(base_url: String, proxy: &str) -> hodl_core::error::Result<Self> {
+        use hodl_core::error::Error;
+        let proxy =
+            ureq::Proxy::new(proxy).map_err(|e| Error::Endpoint(format!("invalid proxy: {e}")))?;
+        let agent = ureq::AgentBuilder::new().proxy(proxy).build();
+        Ok(Self {
+            transport: Box::new(UreqTransport { agent, base_url }),
+        })
+    }
+
     /// Build with a custom transport (for tests).
     pub fn with_transport(transport: Box<dyn LwsTransport>) -> Self {
         Self { transport }

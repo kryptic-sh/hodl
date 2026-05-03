@@ -19,6 +19,7 @@ hex.workspace = true
 zeroize.workspace = true
 tiny-keccak.workspace = true
 ureq.workspace = true
+socks = { workspace = true }
 curve25519-dalek.workspace = true
 base58-monero.workspace = true
 

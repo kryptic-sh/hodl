@@ -22,6 +22,7 @@ bech32 = { workspace = true }
 bs58 = { workspace = true }
 rustls = { workspace = true }
 webpki-roots = { workspace = true }
+socks = { workspace = true }
 k256 = { workspace = true }
 
 [dev-dependencies]

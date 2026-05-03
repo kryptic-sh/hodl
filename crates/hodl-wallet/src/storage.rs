@@ -31,3 +31,52 @@ pub fn ensure_wallets_dir(data_root: &Path) -> Result<()> {
     std::fs::create_dir_all(&dir)?;
     Ok(())
 }
+
+/// List wallet names (file stems of `*.vault` files) in `<data_root>/wallets/`.
+///
+/// Returns an empty vec if the directory does not exist yet.
+pub fn list_wallets(data_root: &Path) -> Result<Vec<String>> {
+    let dir = wallets_dir(data_root);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("vault")
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+        {
+            names.push(stem.to_string());
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn list_wallets_empty_dir() {
+        let tmp = TempDir::new().unwrap();
+        let names = list_wallets(tmp.path()).unwrap();
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn list_wallets_two_vaults() {
+        let tmp = TempDir::new().unwrap();
+        let dir = wallets_dir(tmp.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("alpha.vault"), b"x").unwrap();
+        std::fs::write(dir.join("beta.vault"), b"x").unwrap();
+        // Non-vault file should be ignored.
+        std::fs::write(dir.join("notes.txt"), b"ignore").unwrap();
+
+        let names = list_wallets(tmp.path()).unwrap();
+        assert_eq!(names, vec!["alpha", "beta"]);
+    }
+}

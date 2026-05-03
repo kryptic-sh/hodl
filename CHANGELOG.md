@@ -10,6 +10,35 @@ and this project adheres to
 
 ### Added
 
+- M8 polish:
+  - **Tor SOCKS5 passthrough** for all chain backends. Enabled via
+    `tor.enabled = true` + `tor.socks5 = "socks5://127.0.0.1:9050"` in the
+    config. Wired in Electrum (TCP + TLS via `socks = "0.3"` crate), ETH/BSC
+    JSON-RPC and Monero LWS + daemon RPC (via ureq `socks-proxy` feature).
+    `hodl-core::proxy::parse_socks5_url` helper with unit tests.
+  - **Address book**: new `address_book.toml` (separate from `config.toml`),
+    `hodl_config::{AddressBook, Contact}` with explicit-save semantics, TUI
+    screen (`hodl-tui::address_book`) with `hjkl-picker`-style list, `a` add
+    (four-field form via `hjkl-form`), `d` delete with Y/N confirmation, `b`
+    from Accounts opens it. Round-trip + missing-file tests.
+  - **Multi-wallet switcher**: `hodl_wallet::storage::list_wallets` lists
+    `.vault` files in `<data_root>/wallets/`. `w` on the lock screen opens an
+    `hjkl-picker` overlay; selecting a wallet re-locks any current unlocked
+    state and re-enters the lock screen for the chosen vault. Unit test with two
+    vault stubs + non-vault file filtering.
+
+### Changed
+
+- **Lock auto-timeout** now reads `Config.lock.idle_timeout_secs` at startup
+  instead of hard-coding 5 minutes. `DEFAULT_IDLE_TIMEOUT` (5 min) remains as a
+  fallback when the config cannot be loaded or when `idle_timeout_secs` is 0.
+- `App::new_unlock` / `new_create` / `new_restore` no longer take an
+  `idle_timeout: Duration` argument — the timeout is read from the config
+  internally. `run_with_timeout` kept for tests via the new
+  `new_unlock_with_timeout` constructor.
+- `lock::event_loop` gains a `data_root: &Path` parameter needed by the
+  wallet-switcher picker.
+
 - New crate `hodl-chain-monero`. **Ledger-compatible BIP-39 key derivation** per
   `PLAN.md`: `spend = sc_reduce32(keccak256(bip32_at(m/44'/128'/0'/0/0)))`,
   `view = sc_reduce32(keccak256(spend))`. Matches Cake Wallet, Monerujo (Ledger

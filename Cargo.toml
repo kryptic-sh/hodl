@@ -39,7 +39,8 @@ clap = { version = "4", features = ["derive"] }
 ratatui = "0.30"
 crossterm = "0.29"
 tokio = { version = "1", features = ["full"] }
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "2", features = ["json", "socks-proxy"] }
+socks = "0.3"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Light-wallet crypto primitives. Pulled in at workspace level so all
 # crates agree on a single version of the secp256k1 / hashing stack.
