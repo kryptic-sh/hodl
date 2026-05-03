@@ -10,15 +10,15 @@ use hodl_wallet::mnemonic::{self, WordCount};
 use hodl_wallet::storage;
 use hodl_wallet::vault::KdfParams;
 
+/// ASCII-art banner. Regenerate with:
+///
+/// ```sh
+/// figlet -f "ANSI Regular" hodl > apps/hodl/src/art.txt
+/// ```
 const LONG_ABOUT: &str = concat!(
     "\n",
-    " _               _ _ \n",
-    "| |__   ___   __| | |\n",
-    "| '_ \\ / _ \\ / _` | |\n",
-    "| | | | (_) | (_| | |\n",
-    "|_| |_|\\___/ \\__,_|_|\n",
-    "\n",
-    "Light crypto wallet — TUI · v",
+    include_str!("art.txt"),
+    "\nLight crypto wallet — TUI · v",
     env!("CARGO_PKG_VERSION"),
 );
 
@@ -173,10 +173,11 @@ mod cli_tests {
     fn long_help_contains_ascii_art() {
         let mut cmd = Cli::command();
         let help = cmd.render_long_help().to_string();
-        // Distinctive interior line of the figlet 'hodl' standard font.
+        // The full embedded ASCII art block must appear verbatim in the
+        // long-form help.
         assert!(
-            help.contains("|_| |_|\\___/ \\__,_|_|"),
-            "long_help missing ASCII art line; got:\n{help}"
+            help.contains(include_str!("art.txt")),
+            "long_help missing embedded art.txt block; got:\n{help}"
         );
     }
 
