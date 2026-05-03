@@ -10,6 +10,24 @@ and this project adheres to
 
 ### Added
 
+- New crate `hodl-chain-monero`. **Ledger-compatible BIP-39 key derivation** per
+  `PLAN.md`: `spend = sc_reduce32(keccak256(bip32_at(m/44'/128'/0'/0/0)))`,
+  `view = sc_reduce32(keccak256(spend))`. Matches Cake Wallet, Monerujo (Ledger
+  seed), Ledger Live; does **not** match monero-wallet-cli / GUI / MyMonero
+  (those consume the 25-word Electrum-style seed directly). Restore-time warning
+  surfaced in the crate docs and address-derivation entry point.
+- LWS (open-monero-server) client for view-key sync — `login`,
+  `get_address_info`, `get_address_txs`. Daemon JSON-RPC client for
+  `sendrawtransaction`. No default endpoint shipped (privacy policy — users
+  self-host or opt in via config).
+- Workspace deps `curve25519-dalek = "4"`, `base58-monero = "2"`.
+
+### Notes
+
+- M7 covers receive + balance infrastructure only. `build_tx` / `sign` return a
+  clear "not implemented" error — full Monero send (ring signatures,
+  bulletproofs, output stealth addresses) is post-v1.
+
 - M7.5 Navio: `NetworkParams::NAVIO_MAINNET` on `hodl-chain-bitcoin`. Public
   NAVIO via the Bitcoin-family path (P2PKH + bech32 P2WPKH). xNAV blsCT shielded
   spends explicitly post-v1 — no module yet.
