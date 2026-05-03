@@ -407,6 +407,13 @@
         color: var(--fg-muted);
         pointer-events: none;
       }
+      .term pre .ok {
+        color: var(--accent);
+      }
+      .term pre .cm {
+        color: var(--fg-muted);
+        font-style: italic;
+      }
       .term .screen {
         background: #0a0c10;
         color: #d6e0ee;
@@ -681,6 +688,7 @@
       <div class="links">
         <a href="#why">why</a>
         <a href="#chains">chains</a>
+        <a href="#install">install</a>
         <a
           href="https://github.com/kryptic-sh/hodl/blob/main/CHANGELOG.md"
           target="_blank"
@@ -898,6 +906,47 @@
             <div class="name">Dogecoin</div>
             <div class="meta">Electrum-Doge · public RPC</div>
           </div>
+        </div>
+      </section>
+
+      <section id="install">
+        <h2>install</h2>
+        <h3>Build from source — no prebuilt binaries yet.</h3>
+        <p style="color: var(--fg-muted); margin: 0 0 20px">
+          Pre-MVP. Once chain support stabilises, releases will ship binaries
+          for Linux, macOS, and Windows alongside SHA-256 sidecars.
+        </p>
+        <div class="cta">
+          <a
+            class="btn primary"
+            href="https://github.com/kryptic-sh/hodl/releases"
+            target="_blank"
+            rel="noopener"
+            >releases ↗</a
+          >
+          <a class="btn" href="#why">why hodl ↓</a>
+        </div>
+        <div class="term" style="margin-top: 20px">
+          <div class="chrome">
+            <span class="dot r"></span><span class="dot y"></span
+            ><span class="dot g"></span>
+            <div class="titlebar">hodl — from source</div>
+          </div>
+          <pre
+            style="
+              margin: 0;
+              padding: 14px 16px;
+              font-size: 13px;
+              line-height: 1.6;
+              overflow-x: auto;
+              color: var(--fg);
+              font-family: var(--mono);
+            "
+          ><span class="ok">$</span> git clone https://github.com/kryptic-sh/hodl
+<span class="ok">$</span> cd hodl
+<span class="ok">$</span> cargo build --release
+
+<span class="cm"># binary in target/release/hodl</span></pre>
         </div>
       </section>
     </main>
