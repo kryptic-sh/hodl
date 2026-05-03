@@ -1,0 +1,969 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#73daca" />
+    <title>hodl — light crypto wallet. TUI. Rust + ratatui.</title>
+    <meta
+      name="description"
+      content="hodl — light crypto wallet for the terminal. BIP-39 seed restores Bitcoin, Ethereum, BSC, Monero, Navio, and major Bitcoin forks. Local keys, no custodian, no full node."
+    />
+    <meta
+      name="keywords"
+      content="hodl, crypto wallet, tui wallet, terminal wallet, rust wallet, light wallet, bitcoin, ethereum, monero, navio, bnb, bsc, litecoin, dogecoin, bch, bsv, bip39, ratatui, kryptic"
+    />
+    <link rel="canonical" href="https://hodl.kryptic.sh/" />
+    <meta name="robots" content="index, follow" />
+    <meta property="og:title" content="hodl — light crypto wallet (TUI)" />
+    <meta
+      property="og:description"
+      content="Light crypto wallet for the terminal. BIP-39 in, addresses out. Bitcoin, Ethereum, BSC, Monero, Navio, and major Bitcoin forks. Local keys, no custodian."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://hodl.kryptic.sh/" />
+    <meta property="og:site_name" content="hodl" />
+    <meta property="og:image" content="https://hodl.kryptic.sh/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="hodl — light crypto wallet (TUI). Rust + ratatui."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="hodl — light crypto wallet (TUI)" />
+    <meta
+      name="twitter:description"
+      content="Light crypto wallet for the terminal. BIP-39 in, addresses out. Local keys, no custodian. Rust + ratatui."
+    />
+    <meta name="twitter:image" content="https://hodl.kryptic.sh/og-image.png" />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="alternate icon" type="image/x-icon" href="favicon.ico" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <link rel="manifest" href="manifest.json" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "hodl",
+        "description": "Light crypto wallet for the terminal. BIP-39 seed restores Bitcoin, Ethereum, BSC, Monero, Navio, and major Bitcoin forks.",
+        "url": "https://hodl.kryptic.sh/",
+        "applicationCategory": "FinanceApplication",
+        "operatingSystem": "Linux, macOS, Windows",
+        "programmingLanguage": "Rust",
+        "license": "https://opensource.org/licenses/MIT",
+        "codeRepository": "https://github.com/kryptic-sh/hodl",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
+    <!-- Google tag (gtag.js) -->
+    <script>
+      (function () {
+        var loaded = false;
+        function loadGA() {
+          if (loaded) return;
+          loaded = true;
+          var s = document.createElement('script');
+          s.async = true;
+          s.src = 'https://www.googletagmanager.com/gtag/js?id=G-1CWEH6CWX8';
+          document.head.appendChild(s);
+          window.dataLayer = window.dataLayer || [];
+          function gtag() {
+            dataLayer.push(arguments);
+          }
+          gtag('js', new Date());
+          gtag('config', 'G-1CWEH6CWX8');
+        }
+        ['pointerdown', 'keydown', 'scroll', 'touchstart'].forEach(
+          function (e) {
+            window.addEventListener(e, loadGA, { once: true, passive: true });
+          }
+        );
+        setTimeout(loadGA, 8000);
+      })();
+    </script>
+    <style>
+      :root {
+        --bg: #0b0d10;
+        --bg-alt: #11141a;
+        --panel: #141820;
+        --border: #1f2530;
+        --border-strong: #2a3240;
+        --fg: #e5e9f0;
+        --fg-dim: #8b95a7;
+        --fg-muted: #8a93a4;
+        --accent: #73daca;
+        --accent-hover: #9ce4d8;
+        --accent-dim: #2f6a62;
+        --accent-ink: #07201d;
+        --green: #7ee787;
+        --orange: #ff9e64;
+        --purple: #bb9af7;
+        --blue: #7aa2f7;
+        --red: #f7768e;
+        --yellow: #e0af68;
+        --mono:
+          'Hack', 'JetBrains Mono', 'DejaVu Sans Mono', 'Liberation Mono',
+          monospace;
+        --sans:
+          'Hack', 'JetBrains Mono', 'DejaVu Sans Mono', 'Liberation Mono',
+          monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--sans);
+        font-size: 16px;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+        background-image:
+          radial-gradient(
+            circle at 20% 0%,
+            rgba(115, 218, 202, 0.08),
+            transparent 40%
+          ),
+          radial-gradient(
+            circle at 80% 20%,
+            rgba(125, 207, 255, 0.05),
+            transparent 45%
+          );
+      }
+      @media (min-width: 900px) {
+        body {
+          background-attachment: fixed;
+        }
+      }
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      code,
+      pre,
+      .mono {
+        font-family: var(--mono);
+        line-height: 1.5;
+      }
+
+      .wrap {
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 0 24px;
+      }
+
+      .siblings {
+        border-bottom: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.2);
+      }
+      .siblings-inner {
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 8px 24px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--fg-muted);
+        align-items: center;
+      }
+      .siblings-inner a {
+        color: var(--fg-muted);
+      }
+      .siblings-inner a:hover {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .siblings-inner .current {
+        color: var(--accent);
+      }
+      .siblings-inner .sep {
+        color: var(--border-strong);
+      }
+      @media (max-width: 560px) {
+        .siblings-inner {
+          gap: 6px 14px;
+          justify-content: center;
+        }
+        .siblings-inner .sep {
+          display: none;
+        }
+      }
+
+      nav.top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px 24px;
+        max-width: 1040px;
+        margin: 0 auto;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-family: var(--mono);
+        font-weight: 700;
+        font-size: 18px;
+        line-height: 1;
+      }
+      .brand .prompt {
+        color: var(--accent);
+      }
+      .brand .cursor {
+        display: inline-block;
+        width: 8px;
+        height: 16px;
+        background: var(--accent);
+        vertical-align: middle;
+        margin-left: 2px;
+        animation: blink 1s steps(1) infinite;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+      nav.top .links {
+        display: flex;
+        gap: 22px;
+        font-size: 14px;
+        color: var(--fg-dim);
+        font-family: var(--mono);
+      }
+      nav.top .links a {
+        color: var(--fg-dim);
+      }
+      nav.top .links a:hover {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      @media (max-width: 560px) {
+        nav.top {
+          flex-wrap: wrap;
+          gap: 12px 16px;
+          padding: 16px 20px;
+          justify-content: center;
+        }
+        nav.top .brand {
+          width: 100%;
+          justify-content: center;
+        }
+        nav.top .links {
+          gap: 14px;
+          flex-wrap: wrap;
+          justify-content: center;
+          width: 100%;
+        }
+      }
+
+      header.hero {
+        padding: 24px 0 40px;
+      }
+      h1 {
+        font-size: clamp(40px, 6vw, 68px);
+        line-height: 1.05;
+        margin: 0 0 20px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+      h1 .grad {
+        background: linear-gradient(
+          120deg,
+          var(--accent) 0%,
+          #7dcfff 60%,
+          #b4f9f0 100%
+        );
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .tagline {
+        font-size: 20px;
+        line-height: 1.4;
+        color: var(--fg-dim);
+        margin: 0 0 14px;
+        max-width: 640px;
+      }
+      .badges {
+        margin-top: 16px;
+        margin-bottom: 20px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .badge {
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1;
+        padding: 9px 10px;
+        border: 1px solid var(--border-strong);
+        border-radius: 4px;
+        color: var(--fg-dim);
+        background: var(--bg-alt);
+      }
+      .badge.live {
+        color: var(--accent);
+        border-color: var(--accent-dim);
+      }
+      .badge.warn {
+        color: var(--orange);
+        border-color: #7a4a2a;
+      }
+
+      .cta {
+        margin-top: 30px;
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .btn {
+        font-family: var(--mono);
+        font-size: 14px;
+        font-weight: 500;
+        padding: 11px 18px;
+        border-radius: 6px;
+        border: 1px solid var(--border-strong);
+        color: var(--fg);
+        background: var(--bg-alt);
+        cursor: pointer;
+        transition: all 0.15s;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .btn:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+        text-decoration: none;
+        transform: translateY(-1px);
+      }
+      .btn.primary {
+        background: var(--accent);
+        color: var(--accent-ink);
+        border-color: var(--accent);
+        font-weight: 700;
+      }
+      .btn.primary:hover {
+        background: var(--accent-hover);
+        color: var(--accent-ink);
+        border-color: var(--accent-hover);
+      }
+
+      /* terminal mock */
+      .term {
+        background: var(--panel);
+        border: 1px solid var(--border-strong);
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow:
+          0 10px 40px rgba(0, 0, 0, 0.4),
+          0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+        margin: 40px 0 0;
+      }
+      .term .chrome {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        background: #0d1016;
+        border-bottom: 1px solid var(--border);
+      }
+      .term .chrome .dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+      }
+      .term .chrome .dot.r {
+        background: #ff5f56;
+      }
+      .term .chrome .dot.y {
+        background: #ffbd2e;
+      }
+      .term .chrome .dot.g {
+        background: #27c93f;
+      }
+      .term .titlebar {
+        flex: 1;
+        margin-left: 12px;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--fg-muted);
+        text-align: center;
+      }
+      .term .screen {
+        background: #0a0c10;
+        color: #d6e0ee;
+        padding: 18px 22px;
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.5;
+        min-height: 320px;
+      }
+      .term .screen .row {
+        display: flex;
+        gap: 16px;
+      }
+      .term .screen .col {
+        flex: 1;
+        min-width: 0;
+      }
+      .tui-box {
+        border: 1px solid var(--border-strong);
+        border-radius: 4px;
+        padding: 8px 12px;
+        margin-bottom: 10px;
+      }
+      .tui-box .tui-title {
+        color: var(--accent);
+        font-weight: 700;
+        margin: -16px 0 4px;
+        background: #0a0c10;
+        display: inline-block;
+        padding: 0 6px;
+      }
+      .tui-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .tui-row .name {
+        color: var(--fg);
+      }
+      .tui-row .amt {
+        color: var(--accent);
+      }
+      .tui-row .sym {
+        color: var(--fg-muted);
+      }
+      .tui-row.sel {
+        background: rgba(115, 218, 202, 0.12);
+        margin: 0 -12px;
+        padding: 0 12px;
+      }
+      .tui-row.sel .name {
+        color: var(--accent);
+      }
+      .tui-row.sel::before {
+        content: '▶ ';
+        color: var(--accent);
+      }
+      .term .statusbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 12px;
+        background: #0d1016;
+        border-top: 1px solid var(--border);
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--fg-dim);
+      }
+      .mode-badge {
+        background: var(--accent);
+        color: var(--accent-ink);
+        font-weight: 700;
+        padding: 5px 14px;
+        letter-spacing: 0.08em;
+      }
+
+      section {
+        padding: 64px 0;
+        border-top: 1px solid var(--border);
+        content-visibility: auto;
+        contain-intrinsic-size: 1px 800px;
+      }
+      section h2 {
+        font-family: var(--mono);
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        color: var(--fg-muted);
+        margin: 0 0 8px;
+        font-weight: 500;
+      }
+      section h2::before {
+        content: '## ';
+        color: var(--accent);
+      }
+      section h3 {
+        font-size: 28px;
+        line-height: 1.25;
+        margin: 0 0 28px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 1px;
+        background: var(--border);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .feat {
+        background: var(--bg-alt);
+        padding: 24px;
+      }
+      .feat .icon {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--accent);
+        margin-bottom: 10px;
+        letter-spacing: 0.1em;
+      }
+      .feat h4 {
+        margin: 0 0 6px;
+        font-size: 17px;
+        font-weight: 600;
+      }
+      .feat p {
+        margin: 0;
+        color: var(--fg-dim);
+        font-size: 14.5px;
+        line-height: 1.55;
+      }
+
+      .chains {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+      }
+      .chain {
+        background: var(--bg-alt);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 14px 16px;
+      }
+      .chain .sym {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--fg-muted);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      .chain .name {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 4px 0 6px;
+      }
+      .chain .meta {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--fg-dim);
+      }
+      .chain.tier1 {
+        border-left: 3px solid var(--accent);
+      }
+      .chain.tier1 .name {
+        color: var(--accent);
+      }
+      .chain.tier2 {
+        border-left: 3px solid var(--accent-dim);
+      }
+
+      .keys {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+      }
+      .key-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        background: var(--bg-alt);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 14px;
+      }
+      .key-row span {
+        color: var(--fg-dim);
+      }
+      kbd {
+        font-family: var(--mono);
+        font-size: 12px;
+        padding: 2px 7px;
+        background: var(--panel);
+        border: 1px solid var(--border-strong);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        color: var(--accent);
+      }
+
+      .status-card {
+        background: var(--panel);
+        border: 1px solid var(--border-strong);
+        border-left: 3px solid var(--orange);
+        border-radius: 6px;
+        padding: 18px 22px;
+        color: var(--fg-dim);
+      }
+      .status-card strong {
+        color: var(--orange);
+        font-family: var(--mono);
+      }
+
+      .group-label {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--fg-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        margin: 24px 0 10px;
+      }
+      .group-label:first-child {
+        margin-top: 0;
+      }
+
+      footer {
+        padding: 40px 0 60px;
+        border-top: 1px solid var(--border);
+        color: var(--fg-muted);
+        font-family: var(--mono);
+        font-size: 13px;
+      }
+      .footer-inner {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 16px;
+      }
+      footer a {
+        color: var(--fg-dim);
+      }
+
+      ::selection {
+        background: var(--accent);
+        color: var(--accent-ink);
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="siblings">
+      <div class="siblings-inner">
+        <a href="https://www.kryptic.sh/">kryptic</a>
+        <span class="sep">·</span>
+        <a href="https://sqeel.kryptic.sh/">sqeel</a>
+        <span class="sep">·</span>
+        <a href="https://buffr.kryptic.sh/">buffr</a>
+        <span class="sep">·</span>
+        <a href="https://hjkl.kryptic.sh/">hjkl</a>
+        <span class="sep">·</span>
+        <a href="https://inbx.kryptic.sh/">inbx</a>
+        <span class="sep">·</span>
+        <span class="current">hodl</span>
+      </div>
+    </nav>
+
+    <nav class="top">
+      <div class="brand">
+        <span class="prompt">$</span> hodl<span class="cursor"></span>
+      </div>
+      <div class="links">
+        <a href="#why">why</a>
+        <a href="#chains">chains</a>
+        <a href="#keys">keys</a>
+        <a href="#status">status</a>
+        <a
+          href="https://github.com/kryptic-sh/hodl"
+          target="_blank"
+          rel="noopener"
+          >github ↗</a
+        >
+      </div>
+    </nav>
+
+    <main class="wrap">
+      <header class="hero">
+        <div class="badges">
+          <span class="badge live">● __VERSION__ · early</span>
+          <span class="badge">MIT</span>
+          <span class="badge">Rust + ratatui</span>
+          <span class="badge">BIP-39</span>
+        </div>
+        <h1>
+          Light crypto<br />
+          <span class="grad">wallet.</span>
+        </h1>
+        <p class="tagline">TUI. Local keys. Multi-chain.</p>
+        <p class="tagline" style="color: var(--fg-muted); font-size: 16px">
+          BIP-39 in, addresses out. No full node. No custodian. No phone-home.
+        </p>
+
+        <div class="cta">
+          <a
+            class="btn primary"
+            href="https://github.com/kryptic-sh/hodl"
+            target="_blank"
+            rel="noopener"
+            >view on github →</a
+          >
+          <a class="btn" href="#chains">supported chains ↓</a>
+        </div>
+
+        <div class="term">
+          <div class="chrome">
+            <span class="dot r"></span><span class="dot y"></span
+            ><span class="dot g"></span>
+            <div class="titlebar">hodl — ~/.local/share/hodl</div>
+          </div>
+          <div class="screen">
+            <div class="row">
+              <div class="col">
+                <div class="tui-box">
+                  <div class="tui-title">accounts</div>
+                  <div class="tui-row sel">
+                    <span class="name">Bitcoin</span
+                    ><span class="amt"
+                      >0.04218 <span class="sym">BTC</span></span
+                    >
+                  </div>
+                  <div class="tui-row">
+                    <span class="name">Ethereum</span
+                    ><span class="amt">1.207 <span class="sym">ETH</span></span>
+                  </div>
+                  <div class="tui-row">
+                    <span class="name">Monero</span
+                    ><span class="amt">3.81 <span class="sym">XMR</span></span>
+                  </div>
+                  <div class="tui-row">
+                    <span class="name">BNB Smart Chain</span
+                    ><span class="amt">0.62 <span class="sym">BNB</span></span>
+                  </div>
+                  <div class="tui-row">
+                    <span class="name">Litecoin</span
+                    ><span class="amt">2.4 <span class="sym">LTC</span></span>
+                  </div>
+                  <div class="tui-row">
+                    <span class="name">Dogecoin</span
+                    ><span class="amt">412 <span class="sym">DOGE</span></span>
+                  </div>
+                </div>
+              </div>
+              <div class="col">
+                <div class="tui-box">
+                  <div class="tui-title">receive · btc</div>
+                  <div style="color: var(--fg-muted); margin-bottom: 6px">
+                    m/84'/0'/0'/0/3
+                  </div>
+                  <div style="color: var(--accent); word-break: break-all">
+                    bc1q9h3...x7vkz4n2
+                  </div>
+                </div>
+                <div class="tui-box">
+                  <div class="tui-title">history</div>
+                  <div class="tui-row">
+                    <span class="name">+ 0.012 BTC</span
+                    ><span class="sym">2 confs</span>
+                  </div>
+                  <div class="tui-row">
+                    <span class="name">- 0.045 ETH</span
+                    ><span class="sym">12 confs</span>
+                  </div>
+                  <div class="tui-row">
+                    <span class="name">+ 1.20 XMR</span
+                    ><span class="sym">8 confs</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar">
+            <span class="mode-badge">NORMAL</span>
+            <span>j/k move · enter open · s send · r receive · q quit</span>
+          </div>
+        </div>
+      </header>
+
+      <section id="why">
+        <h2>why</h2>
+        <h3>A wallet shaped like a terminal, not a tab.</h3>
+        <div class="grid">
+          <div class="feat">
+            <div class="icon">01 — KEYS</div>
+            <h4>Local-only keys</h4>
+            <p>
+              BIP-39 seed encrypted with Argon2id + ChaCha20-Poly1305. Never
+              uploaded. Never escrowed. Yours.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">02 — RESTORE</div>
+            <h4>12 or 24 word seed</h4>
+            <p>
+              Standard BIP-39. Same mnemonic restores every supported chain.
+              Optional 25th-word passphrase.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">03 — LIGHT</div>
+            <h4>No full node</h4>
+            <p>
+              Talks to Electrum servers, JSON-RPC endpoints, Monero LWS. No
+              gigabytes of chain to sync. Bring your own node when you want
+              privacy.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">04 — MULTI</div>
+            <h4>Multi-chain by default</h4>
+            <p>
+              Bitcoin, Ethereum, Monero, BSC, plus the major Bitcoin forks. One
+              binary. One seed. One keyboard.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">05 — TERMINAL</div>
+            <h4>ratatui-native</h4>
+            <p>
+              Truecolor TUI in any modern terminal. SSH-friendly. No Electron,
+              no JVM, no QR-scan-from-phone dance.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">06 — PRIVACY</div>
+            <h4>Zero telemetry</h4>
+            <p>
+              No analytics, no update pings, no crash reports. Tor passthrough
+              for every chain backend. Your money, your business.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="chains">
+        <h2>chains</h2>
+        <h3>Bitcoin first. Ethereum next. Forks by market share.</h3>
+
+        <div class="group-label">tier 1 — first cut</div>
+        <div class="chains">
+          <div class="chain tier1">
+            <div class="sym">BTC · slip-44 0</div>
+            <div class="name">Bitcoin</div>
+            <div class="meta">Electrum 1.4 · P2PKH/P2SH/bech32/taproot</div>
+          </div>
+          <div class="chain tier1">
+            <div class="sym">ETH · slip-44 60</div>
+            <div class="name">Ethereum</div>
+            <div class="meta">JSON-RPC · EIP-155 · EIP-1559 fees</div>
+          </div>
+          <div class="chain tier1">
+            <div class="sym">BNB · chain-id 56</div>
+            <div class="name">BNB Smart Chain</div>
+            <div class="meta">EVM · reuses ETH derivation + signer</div>
+          </div>
+          <div class="chain tier1">
+            <div class="sym">XMR · slip-44 128</div>
+            <div class="name">Monero</div>
+            <div class="meta">
+              LWS protocol · Ledger-compat BIP-39 derivation
+            </div>
+          </div>
+          <div class="chain tier1">
+            <div class="sym">NAVIO · slip-44 130</div>
+            <div class="name">Navio</div>
+            <div class="meta">
+              ElectrumX · BTC-derivative codebase · xNAV (blsCT) privacy
+            </div>
+          </div>
+        </div>
+
+        <div class="group-label">tier 2 — bitcoin-derivative chains</div>
+        <div class="chains">
+          <div class="chain tier2">
+            <div class="sym">LTC · slip-44 2</div>
+            <div class="name">Litecoin</div>
+            <div class="meta">Electrum-LTC · MWEB optional</div>
+          </div>
+          <div class="chain tier2">
+            <div class="sym">DOGE · slip-44 3</div>
+            <div class="name">Dogecoin</div>
+            <div class="meta">Electrum-Doge · public RPC</div>
+          </div>
+          <div class="chain tier2">
+            <div class="sym">BCH · slip-44 145</div>
+            <div class="name">Bitcoin Cash</div>
+            <div class="meta">CashAddr · Electrum-Cash</div>
+          </div>
+          <div class="chain tier2">
+            <div class="sym">BSV · slip-44 236</div>
+            <div class="name">Bitcoin SV</div>
+            <div class="meta">Electrum SV servers</div>
+          </div>
+          <div class="chain tier2">
+            <div class="sym">XEC · slip-44 1899</div>
+            <div class="name">eCash</div>
+            <div class="meta">Chronik · Electrum-Cash protocol</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="keys">
+        <h2>keys</h2>
+        <h3>The map you already know.</h3>
+        <div class="keys">
+          <div class="key-row"><span>Move down / up</span><kbd>j / k</kbd></div>
+          <div class="key-row"><span>Top / bottom</span><kbd>gg / G</kbd></div>
+          <div class="key-row"><span>Open account</span><kbd>enter</kbd></div>
+          <div class="key-row"><span>Receive</span><kbd>r</kbd></div>
+          <div class="key-row"><span>Send</span><kbd>s</kbd></div>
+          <div class="key-row"><span>History</span><kbd>h</kbd></div>
+          <div class="key-row"><span>Switch chain</span><kbd>gt / gT</kbd></div>
+          <div class="key-row"><span>Command</span><kbd>:</kbd></div>
+          <div class="key-row"><span>Search</span><kbd>/</kbd></div>
+          <div class="key-row"><span>Lock wallet</span><kbd>:lock</kbd></div>
+          <div class="key-row"><span>Quit</span><kbd>:q</kbd></div>
+        </div>
+      </section>
+
+      <section id="status">
+        <h2>status</h2>
+        <h3>Pre-release. Scaffold growing.</h3>
+        <div class="status-card">
+          <p style="margin: 0 0 8px">
+            <strong>Status:</strong> early (<code>__VERSION__</code>). Workspace
+            scaffolded — <code>hodl-core</code>, <code>hodl-wallet</code>,
+            <code>hodl-tui</code>, <code>hodl-config</code>. No chain backends
+            wired yet.
+          </p>
+          <p style="margin: 0">
+            Roadmap and chain priorities live in
+            <a href="https://github.com/kryptic-sh/hodl/blob/main/PLAN.md"
+              >PLAN.md</a
+            >. Star
+            <a href="https://github.com/kryptic-sh/hodl"
+              >github.com/kryptic-sh/hodl</a
+            >
+            for releases.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap footer-inner">
+        <div>hodl · MIT · built in Rust</div>
+        <div>
+          <a href="https://github.com/kryptic-sh/hodl">github</a>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>
