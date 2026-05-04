@@ -1,8 +1,8 @@
 //! Settings screen — hjkl-form with endpoint picker, Tor toggle,
 //! KDF selector, and lock-timeout editor.
 //!
-//! The only place config is written to disk is the explicit Save submit.
-//! Per PLAN.md: never auto-write on missing config.
+//! The only place config is written to disk is the explicit Save submit —
+//! never auto-write on missing config.
 
 use std::path::PathBuf;
 

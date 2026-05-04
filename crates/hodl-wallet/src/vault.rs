@@ -15,7 +15,7 @@
 //! - `ciphertext + tag` — `chacha20poly1305::ChaCha20Poly1305::encrypt`
 //!   produces ciphertext with the 16-byte Poly1305 tag appended.
 //!
-//! KDF: Argon2id, default `m=64 MiB, t=3, p=1` per PLAN.md. Output is the
+//! KDF: Argon2id, default `m=64 MiB, t=3, p=1`. Output is the
 //! 32-byte ChaCha20-Poly1305 key.
 
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -35,7 +35,7 @@ pub const PARAMS_LEN: usize = 16;
 pub const HEADER_LEN: usize = 8 + 2 + PARAMS_LEN + SALT_LEN + NONCE_LEN;
 pub const KEY_LEN: usize = 32;
 
-/// Argon2id parameters. PLAN defaults: 64 MiB, t=3, p=1.
+/// Argon2id parameters. Defaults: 64 MiB, t=3, p=1.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct KdfParams {
     /// Memory cost in KiB.

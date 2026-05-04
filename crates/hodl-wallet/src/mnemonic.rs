@@ -1,8 +1,7 @@
 //! BIP-39 mnemonic generation and seed derivation.
 //!
 //! Wraps the `bip39` crate. Accepts only 12-word (128-bit entropy) and
-//! 24-word (256-bit entropy) mnemonics per PLAN.md — other lengths are
-//! rejected on input.
+//! 24-word (256-bit entropy) mnemonics — other lengths are rejected on input.
 
 use bip39::{Language, Mnemonic};
 use zeroize::{Zeroize, ZeroizeOnDrop};
