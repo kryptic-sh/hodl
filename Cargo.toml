@@ -59,7 +59,6 @@ tempfile = "3"
 bech32 = "0.11"
 bs58 = { version = "0.5", features = ["check"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-webpki-roots = "0.26"
 k256 = { version = "0.13", features = ["arithmetic", "ecdsa"] }
 tiny-keccak = { version = "2", features = ["keccak"] }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }

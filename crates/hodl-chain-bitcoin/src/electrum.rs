@@ -53,20 +53,15 @@ impl ElectrumClient {
     /// SOCKS5 dials the tunnel, then rustls performs the TLS handshake over it.
     /// `proxy_url` — `socks5://host:port`.
     pub fn connect_tls_via_socks5(host: &str, port: u16, proxy_url: &str) -> Result<Self> {
+        use rustls::ClientConnection;
         use rustls::pki_types::ServerName;
-        use rustls::{ClientConfig, ClientConnection};
 
         let (proxy_host, proxy_port) = parse_socks5_url(proxy_url)?;
         let stream = socks::Socks5Stream::connect((proxy_host.as_str(), proxy_port), (host, port))
             .map_err(|e| Error::Network(format!("SOCKS5 connect {host}:{port}: {e}")))?;
         let tcp = stream.into_inner();
 
-        let roots = webpki_roots::TLS_SERVER_ROOTS.to_vec();
-        let root_store = rustls::RootCertStore { roots };
-        let config = ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
-        let config = Arc::new(config);
+        let config = electrum_tls_config();
         let server_name = ServerName::try_from(host.to_owned())
             .map_err(|e| Error::Network(format!("invalid TLS server name {host}: {e}")))?;
         let conn = ClientConnection::new(config, server_name)
@@ -75,17 +70,15 @@ impl ElectrumClient {
         Ok(Self::from_transport(Box::new(tls)))
     }
 
-    /// Open a TLS connection using rustls with the system/webpki root store.
+    /// Open a TLS connection.
+    ///
+    /// Uses an Electrum-protocol-appropriate TLS config that accepts any
+    /// server certificate — see `electrum_tls_config` for rationale.
     pub fn connect_tls(host: &str, port: u16) -> Result<Self> {
+        use rustls::ClientConnection;
         use rustls::pki_types::ServerName;
-        use rustls::{ClientConfig, ClientConnection};
 
-        let roots = webpki_roots::TLS_SERVER_ROOTS.to_vec();
-        let root_store = rustls::RootCertStore { roots };
-        let config = ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
-        let config = Arc::new(config);
+        let config = electrum_tls_config();
         let server_name = ServerName::try_from(host.to_owned())
             .map_err(|e| Error::Network(format!("invalid TLS server name {host}: {e}")))?;
         let tcp = TcpStream::connect((host, port))
@@ -206,6 +199,85 @@ impl ElectrumClient {
 pub struct ScriptHashBalance {
     pub confirmed: u64,
     pub unconfirmed: i64,
+}
+
+// ── TLS configuration ─────────────────────────────────────────────────────
+
+/// Build a `rustls::ClientConfig` suitable for talking to Electrum servers.
+///
+/// **Accepts any server certificate.** This is intentional and matches
+/// every Electrum-protocol wallet (Electrum desktop, Sparrow, BlueWallet,
+/// BWT). The protocol's trust model is:
+///
+/// - Operators rarely bother with CA-signed certs; the curated server lists
+///   are dominated by self-signed certs.
+/// - The wallet's defence is **cross-checking** answers across multiple
+///   independent servers, not trusting any single one's TLS chain.
+/// - Watch-only / view-only RPC traffic only — no spending keys cross the
+///   wire.
+///
+/// Verifying against the Mozilla CA bundle (webpki-roots) would reject
+/// virtually every server in the curated list and make the wallet unusable.
+fn electrum_tls_config() -> Arc<rustls::ClientConfig> {
+    use rustls::ClientConfig;
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+
+    #[derive(Debug)]
+    struct AcceptAnyServerCert;
+
+    impl ServerCertVerifier for AcceptAnyServerCert {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &CertificateDer<'_>,
+            _intermediates: &[CertificateDer<'_>],
+            _server_name: &ServerName<'_>,
+            _ocsp_response: &[u8],
+            _now: UnixTime,
+        ) -> std::result::Result<ServerCertVerified, rustls::Error> {
+            Ok(ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            use rustls::SignatureScheme::*;
+            vec![
+                RSA_PKCS1_SHA256,
+                RSA_PKCS1_SHA384,
+                RSA_PKCS1_SHA512,
+                ECDSA_NISTP256_SHA256,
+                ECDSA_NISTP384_SHA384,
+                ECDSA_NISTP521_SHA512,
+                RSA_PSS_SHA256,
+                RSA_PSS_SHA384,
+                RSA_PSS_SHA512,
+                ED25519,
+            ]
+        }
+    }
+
+    let config = ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(AcceptAnyServerCert))
+        .with_no_client_auth();
+    Arc::new(config)
 }
 
 #[derive(Debug, Deserialize)]

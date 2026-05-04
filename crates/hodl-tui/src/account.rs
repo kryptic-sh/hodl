@@ -433,9 +433,10 @@ fn scan_thread_streaming(
             AttemptResult::Retry(reason) => {
                 debug!("scan attempt {attempt} failed: {reason}; retrying");
                 if attempt == MAX_SCAN_ATTEMPTS {
+                    // `reason` is already prefixed with the chain name by
+                    // classify(); don't double-prefix.
                     let _ = tx.send(ScanEvent::Error(format!(
-                        "{}: all {MAX_SCAN_ATTEMPTS} endpoints failed; last error: {reason}",
-                        chain.display_name()
+                        "all {MAX_SCAN_ATTEMPTS} endpoints failed — last: {reason}"
                     )));
                     return;
                 }
