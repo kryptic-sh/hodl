@@ -25,6 +25,7 @@ use crate::help::{HelpAction, HelpOverlay};
 use crate::lock::{self, Outcome as LockOutcome};
 use crate::onboarding::{self, OnboardingMode, OnboardingOutcome, OnboardingState};
 use crate::receive::{self, ReceiveAction, ReceiveState};
+use crate::scan_cache::ScanCache;
 use crate::send::{self, SendAction, SendState};
 use crate::settings::{self, SettingsAction, SettingsState};
 
@@ -58,6 +59,11 @@ pub struct App {
     help_overlay: Option<HelpOverlay>,
     /// TOFU cert pin store shared across all scan and send threads.
     known_hosts: Arc<Mutex<KnownHosts>>,
+    /// Encrypted, per-wallet on-disk cache of `WalletScan` per chain.
+    /// `Some` only while a wallet is unlocked — the cache key is derived
+    /// from the unlocked seed so re-locking drops both the in-memory
+    /// hashmap and the key (zeroized via `ScanCache::Drop`).
+    scan_cache: Option<ScanCache>,
     /// Stashed AccountState while the Addresses sub-view is open.
     /// Preserves the cached WalletScan so re-entering Accounts does not
     /// trigger a fresh network round-trip.
@@ -82,6 +88,7 @@ impl App {
             clipboard,
             help_overlay: None,
             known_hosts,
+            scan_cache: None,
             accounts_stash: None,
         })
     }
@@ -103,6 +110,7 @@ impl App {
             clipboard,
             help_overlay: None,
             known_hosts,
+            scan_cache: None,
             accounts_stash: None,
         })
     }
@@ -125,6 +133,7 @@ impl App {
             clipboard,
             help_overlay: None,
             known_hosts,
+            scan_cache: None,
             accounts_stash: None,
         })
     }
@@ -150,6 +159,7 @@ impl App {
             clipboard,
             help_overlay: None,
             known_hosts,
+            scan_cache: None,
             accounts_stash: None,
         })
     }
@@ -171,6 +181,7 @@ impl App {
                         LockOutcome::SwitchWallet(name) => {
                             // Re-lock: discard current unlocked state, load the new vault.
                             self.unlocked = None;
+                            self.scan_cache = None;
                             match Wallet::open(&self.data_root, &name) {
                                 Ok(w) => {
                                     self.wallet = Some(w);
@@ -186,11 +197,23 @@ impl App {
                         }
                         LockOutcome::Unlocked(u) => {
                             self.unlocked = Some(u);
+                            // Build the per-wallet scan cache from the freshly-derived
+                            // cache key so subsequent `start_load` calls can prime
+                            // the summary card from disk before the network roundtrip.
+                            if let (Some(unlocked), Some(wallet)) = (&self.unlocked, &self.wallet) {
+                                let key = unlocked.cache_key();
+                                self.scan_cache =
+                                    Some(ScanCache::open(&self.data_root, &wallet.name, key));
+                            }
                             // Build the Accounts screen and immediately kick off the
                             // background load so the animated spinner appears at once.
                             let mut acc_state = self.make_accounts();
                             if let Some(unlocked) = &self.unlocked {
-                                acc_state.start_load(unlocked);
+                                let cached = self
+                                    .scan_cache
+                                    .as_ref()
+                                    .and_then(|c| c.get(acc_state.current_chain));
+                                acc_state.start_load(unlocked, cached);
                             }
                             self.screen = Screen::Accounts(Box::new(acc_state));
                         }
@@ -229,6 +252,14 @@ impl App {
                     if let Screen::Accounts(s) = &mut self.screen
                         && s.poll_scan()
                     {
+                        // If the scan just completed (Done), persist the fresh
+                        // snapshot to the on-disk cache. `take()` so the same
+                        // scan isn't rewritten on every subsequent poll.
+                        if let Some(scan) = s.completed_scan.take()
+                            && let Some(cache) = self.scan_cache.as_mut()
+                        {
+                            cache.put(s.current_chain, scan);
+                        }
                         // State changed (rows arrived or error) — redraw.
                         terminal.draw(|f| {
                             let area = f.area();
@@ -309,10 +340,26 @@ impl App {
                         Some(AccountAction::ChainSwitched) => {
                             // Re-load accounts against the new chain. The picker
                             // already updated `current_chain` on the AccountState.
-                            if let (Screen::Accounts(s), Some(unlocked)) =
-                                (&mut self.screen, &self.unlocked)
+                            // Prime from cache (if any) so the new chain card is
+                            // populated immediately while the background scan runs.
+                            if let Screen::Accounts(s) = &mut self.screen
+                                && let Some(unlocked) = &self.unlocked
                             {
-                                s.start_load(unlocked);
+                                let cached = self
+                                    .scan_cache
+                                    .as_ref()
+                                    .and_then(|c| c.get(s.current_chain));
+                                s.start_load(unlocked, cached);
+                            }
+                        }
+                        Some(AccountAction::Resync) => {
+                            // Force fresh scan — bypass the cache prime so the
+                            // user sees the spinner clearly. The on-disk blob
+                            // is overwritten on `ScanEvent::Done` below.
+                            if let Screen::Accounts(s) = &mut self.screen
+                                && let Some(unlocked) = &self.unlocked
+                            {
+                                s.start_load(unlocked, None);
                             }
                         }
                         Some(AccountAction::OpenAddressBook) => {
@@ -480,11 +527,7 @@ impl App {
 
                     match action {
                         Some(AddressBookAction::Close) => {
-                            let mut acc_state = self.make_accounts();
-                            if let Some(unlocked) = &self.unlocked {
-                                acc_state.start_load(unlocked);
-                            }
-                            self.screen = Screen::Accounts(Box::new(acc_state));
+                            self.enter_accounts();
                         }
                         Some(AddressBookAction::Quit) => return Ok(()),
                         Some(AddressBookAction::ShowHelp) => {
@@ -583,11 +626,7 @@ impl App {
                             } else {
                                 // Fallback: rebuild and re-scan if the stash was
                                 // somehow lost.
-                                let mut acc_state = self.make_accounts();
-                                if let Some(unlocked) = &self.unlocked {
-                                    acc_state.start_load(unlocked);
-                                }
-                                self.screen = Screen::Accounts(Box::new(acc_state));
+                                self.enter_accounts();
                             }
                         }
                         Some(AddressesAction::Quit) => return Ok(()),
@@ -665,11 +704,7 @@ impl App {
 
                     match action {
                         Some(ReceiveAction::Back) => {
-                            let mut acc_state = self.make_accounts();
-                            if let Some(unlocked) = &self.unlocked {
-                                acc_state.start_load(unlocked);
-                            }
-                            self.screen = Screen::Accounts(Box::new(acc_state));
+                            self.enter_accounts();
                         }
                         Some(ReceiveAction::Quit) => return Ok(()),
                         Some(ReceiveAction::ShowHelp) => {
@@ -702,11 +737,7 @@ impl App {
                     };
                     match send::event_loop(terminal, send_state, unlocked)? {
                         SendAction::Back | SendAction::Quit => {
-                            let mut acc_state = self.make_accounts();
-                            if let Some(unlocked) = &self.unlocked {
-                                acc_state.start_load(unlocked);
-                            }
-                            self.screen = Screen::Accounts(Box::new(acc_state));
+                            self.enter_accounts();
                         }
                     }
                 }
@@ -720,18 +751,10 @@ impl App {
                             self.config = new_cfg;
                             // Re-derive the idle timeout from the updated config.
                             self.idle_timeout = idle_timeout_from_config(&self.config);
-                            let mut acc_state = self.make_accounts();
-                            if let Some(unlocked) = &self.unlocked {
-                                acc_state.start_load(unlocked);
-                            }
-                            self.screen = Screen::Accounts(Box::new(acc_state));
+                            self.enter_accounts();
                         }
                         SettingsAction::Back => {
-                            let mut acc_state = self.make_accounts();
-                            if let Some(unlocked) = &self.unlocked {
-                                acc_state.start_load(unlocked);
-                            }
-                            self.screen = Screen::Accounts(Box::new(acc_state));
+                            self.enter_accounts();
                         }
                         SettingsAction::Quit => return Ok(()),
                     }
@@ -748,8 +771,28 @@ impl App {
         )
     }
 
+    /// Build a fresh `AccountState`, prime it from the on-disk scan cache
+    /// (if a snapshot exists for the default chain), kick off the background
+    /// resync, and switch the screen to it. Used by every "back to accounts"
+    /// transition so they all share the same cache-prime + resync behaviour.
+    fn enter_accounts(&mut self) {
+        let mut acc_state = self.make_accounts();
+        if let Some(unlocked) = &self.unlocked {
+            let cached = self
+                .scan_cache
+                .as_ref()
+                .and_then(|c| c.get(acc_state.current_chain));
+            acc_state.start_load(unlocked, cached);
+        }
+        self.screen = Screen::Accounts(Box::new(acc_state));
+    }
+
     fn do_lock(&mut self) {
         self.unlocked = None;
+        // Drop the per-wallet cache. `ScanCache::Drop` zeroizes the
+        // cache key — the on-disk blobs remain (they re-decrypt on
+        // the next unlock).
+        self.scan_cache = None;
         self.screen = Screen::Lock;
         self.last_activity = Instant::now();
         self.help_overlay = None;

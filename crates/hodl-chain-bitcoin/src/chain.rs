@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 
+use serde::{Deserialize, Serialize};
+
 use hodl_core::error::{Error, Result};
 use hodl_core::{
     Address, Amount, Chain, ChainId, FeeRate, PrivateKeyBytes, SendParams, SignedTx, TxId, TxRef,
@@ -115,7 +117,7 @@ fn purpose_script(purpose: Purpose, pubkey_hash: &[u8; 20]) -> Vec<u8> {
 /// "Pending" = mempool only (Electrum's `unconfirmed` field — can be negative
 /// when an incoming unconfirmed output is subsequently spent in the mempool,
 /// so we clamp to 0).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BalanceSplit {
     pub confirmed: u64,
     pub pending: u64,
@@ -132,7 +134,7 @@ impl BalanceSplit {
 }
 
 /// One used address discovered during a gap-limit wallet scan.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsedAddress {
     pub index: u32,
     /// 0 = receive (external) chain, 1 = change (internal) chain — BIP-44 path component.
@@ -142,7 +144,7 @@ pub struct UsedAddress {
 }
 
 /// Result of a gap-limit wallet scan.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WalletScan {
     /// All addresses with history > 0 OR balance > 0, across both receive and
     /// change chains. Order: receive first (sorted by index), then change

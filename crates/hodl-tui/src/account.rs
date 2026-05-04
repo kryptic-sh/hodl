@@ -91,6 +91,8 @@ pub enum AccountAction {
     OpenSettings,
     /// Open the used-addresses sub-view (Step C wires the routing).
     OpenAddresses,
+    /// Force a fresh scan from the network, ignoring any cached snapshot.
+    Resync,
     /// Lock the wallet (return to lock screen).
     Lock,
     /// Quit the application.
@@ -100,10 +102,16 @@ pub enum AccountAction {
 }
 
 pub struct AccountState {
-    /// Background gap-limit scan result — populated by start_load.
+    /// Background gap-limit scan result — populated by start_load (or by
+    /// `start_load`'s `cache` argument before the network roundtrip).
     pub scan: Option<WalletScan>,
     /// Populated when the scan thread returns an error.
     pub scan_error: Option<String>,
+    /// Set on `ScanEvent::Done` so the caller (App) can persist the fresh
+    /// scan to disk via `ScanCache::put`. `App` is expected to `take()` it
+    /// on every poll cycle; if the next poll still sees `Some`, it gets
+    /// written again — harmless but wasteful, so always `take()`.
+    pub completed_scan: Option<WalletScan>,
     /// In-flight scan event channel. `Some` while the background thread is running.
     pending_scan: Option<Receiver<ScanEvent>>,
     /// Partial result accumulated from `ScanEvent::Used` events while
@@ -135,6 +143,7 @@ impl AccountState {
         Self {
             scan: None,
             scan_error: None,
+            completed_scan: None,
             pending_scan: None,
             partial_scan: WalletScan::default(),
             scan_attempt: 0,
@@ -180,7 +189,10 @@ impl AccountState {
                     changed = true;
                 }
                 Ok(ScanEvent::Done(final_scan)) => {
-                    self.scan = Some(final_scan);
+                    self.scan = Some(final_scan.clone());
+                    // Signal the App to persist this fresh snapshot to the
+                    // on-disk cache.
+                    self.completed_scan = Some(final_scan);
                     self.scan_error = None;
                     self.partial_scan = WalletScan::default();
                     self.pending_scan = None;
@@ -228,12 +240,23 @@ impl AccountState {
     /// discovered address before a final `ScanEvent::Done`. For EVM/Monero the
     /// degenerate single-address case sends one `Used` followed by `Done` so
     /// the consumer's event loop is uniform across all chain types.
-    pub fn start_load(&mut self, wallet: &UnlockedWallet) {
-        debug!("start_load (scan) for chain {:?}", self.current_chain);
+    ///
+    /// `cached` — optional snapshot to display **immediately** while the fresh
+    /// scan runs in the background. Pass `None` to force a fully cleared
+    /// view (used by `R` resync). The cache is *not* mutated here; on
+    /// completion the caller persists the new scan via `completed_scan`.
+    pub fn start_load(&mut self, wallet: &UnlockedWallet, cached: Option<Arc<WalletScan>>) {
+        debug!(
+            "start_load (scan) for chain {:?} cached={}",
+            self.current_chain,
+            cached.is_some()
+        );
 
-        // Clear stale data so the loading state is visible immediately.
-        self.scan = None;
+        // Show cached snapshot if available so the card is populated
+        // instantly; the background scan refreshes it transparently.
+        self.scan = cached.map(|c| (*c).clone());
         self.scan_error = None;
+        self.completed_scan = None;
         self.partial_scan = WalletScan::default();
         self.scan_attempt = 1;
         self.flash = None;
@@ -321,6 +344,7 @@ impl AccountState {
             ("s".into(), "Open send screen".into()),
             ("b".into(), "Open address book".into()),
             ("d".into(), "View used addresses".into()),
+            ("R".into(), "Force resync (ignore cache)".into()),
             ("S".into(), "Open settings".into()),
             ("p".into(), "Open chain picker".into()),
             ("q / Esc".into(), "Lock wallet".into()),
@@ -389,6 +413,9 @@ impl AccountState {
                         .unwrap_or(false) =>
             {
                 return Some(AccountAction::OpenAddresses);
+            }
+            KeyCode::Char('R') if !self.is_scanning() => {
+                return Some(AccountAction::Resync);
             }
             KeyCode::Char('S') => {
                 return Some(AccountAction::OpenSettings);
@@ -657,99 +684,88 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
         .map(|c| c.gap_limit)
         .unwrap_or(20);
 
-    // Build card body lines.
-    let body_lines: Vec<Line> =
-        if !state.is_scanning() && state.scan.is_none() && state.scan_error.is_none() {
-            // Initial state pre-scan — render placeholder.
-            vec![
-                Line::from(""),
-                Line::from(Span::styled(
-                    "  press any key to start",
-                    Style::default().fg(Color::DarkGray),
-                )),
-                Line::from(""),
-            ]
-        } else if !state.is_scanning() {
-            if let Some(ref err) = state.scan_error.clone() {
-                // Scan failed — render error in the card body.
-                vec![
-                    Line::from(""),
-                    Line::from(Span::styled(
-                        format!("  error: {err}"),
-                        Style::default().fg(Color::Red),
-                    )),
-                    Line::from(""),
-                ]
-            } else if let Some(ref scan) = state.scan {
-                // Scan complete — render full card.
-                let confirmed = format_sats(scan.total.confirmed, state.current_chain);
-                let pending = format_sats(scan.total.pending, state.current_chain);
-                let total = format_sats(scan.total.total(), state.current_chain);
-                let used_count = scan.used.len();
-                vec![
-                    Line::from(""),
-                    Line::from(format!("   confirmed:    {confirmed}")),
-                    Line::from(format!("   pending:      {pending}")),
-                    Line::from(format!("   total:        {total}")),
-                    Line::from(""),
-                    Line::from(format!("   used addresses:  {used_count}")),
-                    Line::from(format!("   gap limit:       {gap_limit}")),
-                    Line::from(""),
-                    Line::from(Span::styled(
-                        "   r receive · s send · b book · S settings",
-                        Style::default().fg(Color::DarkGray),
-                    )),
-                    Line::from(Span::styled(
-                        "   p picker · d addresses · q lock · ? help",
-                        Style::default().fg(Color::DarkGray),
-                    )),
-                ]
-            } else {
-                vec![]
-            }
+    // Pick which scan snapshot to render: the cached/completed one when
+    // present (so cache-prime + resync shows the existing numbers), else
+    // the partial accumulator that's filling in during a fresh scan.
+    let display_scan: Option<&WalletScan> = state.scan.as_ref().or({
+        if state.is_scanning() {
+            Some(&state.partial_scan)
         } else {
-            // is_scanning() — render PARTIAL state from self.partial_scan with
-            // spinner ticking next to the numbers.
-            let frame = state
-                .scanning_spinner
-                .as_ref()
-                .map(|s| s.current())
-                .unwrap_or("⠋");
-            let confirmed = format_sats(state.partial_scan.total.confirmed, state.current_chain);
-            let pending = format_sats(state.partial_scan.total.pending, state.current_chain);
-            let total = format_sats(state.partial_scan.total.total(), state.current_chain);
-            let used_count = state.partial_scan.used.len();
-            vec![
-                Line::from(""),
-                Line::from(vec![
-                    Span::raw(format!("   confirmed:    {confirmed}  ")),
-                    Span::styled(frame, Style::default().fg(Color::Cyan)),
-                ]),
-                Line::from(vec![
-                    Span::raw(format!("   pending:      {pending}  ")),
-                    Span::styled(frame, Style::default().fg(Color::Cyan)),
-                ]),
-                Line::from(vec![
-                    Span::raw(format!("   total:        {total}  ")),
-                    Span::styled(frame, Style::default().fg(Color::Cyan)),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::raw(format!("   used addresses:  {used_count}  ")),
-                    Span::styled(frame, Style::default().fg(Color::Cyan)),
-                ]),
-                Line::from(format!("   gap limit:       {gap_limit}")),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "   r receive · s send · b book · S settings",
-                    Style::default().fg(Color::DarkGray),
-                )),
-                Line::from(Span::styled(
-                    "   p picker · d addresses · q lock · ? help",
-                    Style::default().fg(Color::DarkGray),
-                )),
-            ]
+            None
+        }
+    });
+    let spinner_frame = state
+        .scanning_spinner
+        .as_ref()
+        .map(|s| s.current())
+        .unwrap_or("⠋");
+
+    // Build card body lines.
+    let body_lines: Vec<Line> = if let Some(ref err) = state.scan_error.clone() {
+        // Scan failed — render error in the card body.
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("  error: {err}"),
+                Style::default().fg(Color::Red),
+            )),
+            Line::from(""),
+        ]
+    } else if let Some(scan) = display_scan {
+        let confirmed = format_sats(scan.total.confirmed, state.current_chain);
+        let pending = format_sats(scan.total.pending, state.current_chain);
+        let total = format_sats(scan.total.total(), state.current_chain);
+        let used_count = scan.used.len();
+        // Spinner suffix only while a scan is in flight.
+        let suffix: Span = if state.is_scanning() {
+            Span::styled(
+                format!("  {spinner_frame}"),
+                Style::default().fg(Color::Cyan),
+            )
+        } else {
+            Span::raw("")
         };
+        vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::raw(format!("   confirmed:    {confirmed}")),
+                suffix.clone(),
+            ]),
+            Line::from(vec![
+                Span::raw(format!("   pending:      {pending}")),
+                suffix.clone(),
+            ]),
+            Line::from(vec![
+                Span::raw(format!("   total:        {total}")),
+                suffix.clone(),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::raw(format!("   used addresses:  {used_count}")),
+                suffix,
+            ]),
+            Line::from(format!("   gap limit:       {gap_limit}")),
+            Line::from(""),
+            Line::from(Span::styled(
+                "   r receive · s send · b book · S settings",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "   p picker · d addresses · R resync · q lock · ? help",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]
+    } else {
+        // No scan, no error, not scanning — initial placeholder.
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  press any key to start",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+        ]
+    };
 
     let body_para = Paragraph::new(body_lines);
     f.render_widget(body_para, card_inner);
@@ -761,14 +777,22 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
             .as_ref()
             .map(|s| s.current())
             .unwrap_or("⠋");
-        let n = state.partial_scan.used.len();
         let attempt_suffix = if state.scan_attempt > 1 {
             format!(" (attempt {}/{MAX_SCAN_ATTEMPTS})", state.scan_attempt)
         } else {
             String::new()
         };
+        // If a cached/previous scan is present, frame this as a refresh
+        // rather than a from-scratch scan — the user is looking at the
+        // cached numbers and we're transparently revalidating them.
+        let label = if state.scan.is_some() {
+            "refreshing".to_string()
+        } else {
+            let n = state.partial_scan.used.len();
+            format!("scanning {n} used so far")
+        };
         (
-            format!("{chain_name} · scanning {n} used so far{attempt_suffix}  {frame}"),
+            format!("{chain_name} · {label}{attempt_suffix}  {frame}"),
             Color::Cyan,
         )
     } else if let Some(ref err) = state.scan_error {
@@ -789,7 +813,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
 
     // Hint bar.
     let hint = Paragraph::new(Line::from(Span::styled(
-        "r receive · s send · b book · d addresses · S settings · p picker · q lock · ? help",
+        "r receive · s send · b book · d addresses · R resync · S settings · p picker · q lock · ? help",
         Style::default().fg(Color::DarkGray),
     )))
     .alignment(Alignment::Center);

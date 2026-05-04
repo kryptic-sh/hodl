@@ -14,6 +14,7 @@ pub mod help;
 pub mod lock;
 pub mod onboarding;
 pub mod receive;
+pub mod scan_cache;
 pub mod send;
 pub mod settings;
 pub mod spinner;

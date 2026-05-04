@@ -4,6 +4,7 @@
 //! Argon2id + ChaCha20-Poly1305 vault. All sensitive material is wrapped in
 //! `Zeroize` / `ZeroizeOnDrop` types so it scrubs on drop.
 
+pub mod cache;
 pub mod derive;
 pub mod error;
 pub mod mnemonic;
@@ -117,6 +118,13 @@ impl UnlockedWallet {
     pub fn lock(self) {
         // Drop runs ZeroizeOnDrop.
         drop(self);
+    }
+
+    /// Derive a 32-byte ChaCha20-Poly1305 key for encrypting on-disk caches
+    /// (scan results, etc) under this wallet. Cheap (single SHA-256) — safe to
+    /// recompute as needed; the seed is the only sensitive input.
+    pub fn cache_key(&self) -> [u8; cache::KEY_LEN] {
+        cache::derive_cache_key(&self.seed.0)
     }
 }
 

@@ -56,6 +56,28 @@ and this project adheres to
 
 ### Added
 
+- **Encrypted on-disk scan cache + `R` resync keybind.** Scan results
+  (`WalletScan`) are now persisted per-wallet, per-chain at
+  `<data_root>/cache/<wallet_name>/<ticker>.cache`. Each file is a
+  ChaCha20-Poly1305 blob whose key is derived as
+  `SHA-256("hodl-cache-v1\0" || seed)` — the seed is already 512 bits of
+  high-entropy material from BIP-39 PBKDF2-HMAC-SHA512, so no Argon2 cost is
+  paid (the unlock step paid it once for the seed). New `hodl_wallet::cache`
+  module ships generic `encrypt` / `decrypt` / `derive_cache_key` helpers;
+  `UnlockedWallet::cache_key()` wraps the derivation. New
+  `hodl_tui::scan_cache::ScanCache` manages an in-memory
+  `HashMap<ChainId, Arc<WalletScan>>` hydrated from disk on unlock and
+  zeroized + dropped on lock (cache key included). Lookups are O(1) on the UI
+  thread; writes go through atomic temp-file + rename. On unlock the Accounts
+  summary card is now primed instantly from the cached snapshot while a
+  background resync runs transparently — the status line reads
+  `<chain> · refreshing  ⠋` instead of the cold-scan
+  `<chain> · scanning N used so far`. New `R` (Shift+r) keybind on the Accounts
+  screen forces a full from-scratch scan ignoring the cache; the freshly
+  completed scan overwrites the on-disk blob via `ScanCache::put` after
+  `ScanEvent::Done`. `BalanceSplit`, `UsedAddress`, and `WalletScan` now derive
+  `Serialize` / `Deserialize` so they can be round-tripped through TOML inside
+  the encrypted blob.
 - **Persistent debug log at `<data_root>/hodl.log`.** All `tracing` events are
   appended to a sync-written, no-ANSI log file under the data directory so
   post-crash review is possible even after the alt-screen tears down. Default
