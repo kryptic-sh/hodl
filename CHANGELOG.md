@@ -8,6 +8,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **Spinner extracted into reusable `Spinner` widget** (`hodl-tui::spinner`) —
+  `SPINNER_FRAMES`, `tick()`, `current()`, and `draw()` are now shared across
+  all screens. `lock.rs` migrated from inline `spinner_frame: usize` + literal
+  frame array to `Spinner`; behaviour is identical.
+
 ### Fixed
 
 - **Vault unlock no longer freezes the TUI** — argon2id KDF runs on a background

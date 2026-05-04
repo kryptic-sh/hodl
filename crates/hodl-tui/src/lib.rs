@@ -15,6 +15,7 @@ pub mod onboarding;
 pub mod receive;
 pub mod send;
 pub mod settings;
+pub mod spinner;
 
 use std::path::PathBuf;
 use std::time::Duration;

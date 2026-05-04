@@ -45,6 +45,7 @@ use zeroize::Zeroize;
 use hodl_wallet::{UnlockedWallet, Wallet, storage::list_wallets};
 
 use crate::help::{HelpAction, HelpOverlay};
+use crate::spinner::Spinner;
 
 /// Outcome reported back to the caller.
 #[derive(Debug)]
@@ -55,9 +56,6 @@ pub enum Outcome {
     /// User selected a different wallet; re-enter lock screen for that wallet.
     SwitchWallet(String),
 }
-
-/// Braille spinner frames — cycles at ~80 ms per frame.
-const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
 /// Run the event loop until the user quits, wallet auto-locks, or unlocks.
 pub fn event_loop<B: Backend>(
@@ -86,7 +84,7 @@ where
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     // Still computing — advance spinner and redraw below.
-                    state.spinner_frame = (state.spinner_frame + 1) % SPINNER_FRAMES.len();
+                    state.spinner.tick();
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     state.pending_unlock = None;
@@ -180,8 +178,8 @@ pub(crate) struct LockState {
     /// All key input is ignored while this is `Some` because the KDF is
     /// uninterruptible — accepting more input would only queue a race.
     pending_unlock: Option<Receiver<Result<UnlockedWallet>>>,
-    /// Current frame index into `SPINNER_FRAMES` for the decrypting animation.
-    spinner_frame: usize,
+    /// Animated spinner shown while decrypting.
+    spinner: Spinner,
 }
 
 fn make_password_form() -> Form {
@@ -199,7 +197,7 @@ impl LockState {
             last_activity: Instant::now(),
             picker: None,
             pending_unlock: None,
-            spinner_frame: 0,
+            spinner: Spinner::new(),
         }
     }
 
@@ -240,7 +238,7 @@ impl LockState {
         });
 
         self.pending_unlock = Some(rx);
-        self.spinner_frame = 0;
+        self.spinner = Spinner::new();
         self.message = None;
     }
 
@@ -444,13 +442,7 @@ fn draw_locked(f: &mut ratatui::Frame, area: Rect, state: &mut LockState) {
 
     // Show spinner while decrypting, otherwise show any status message.
     if state.pending_unlock.is_some() {
-        let frame = SPINNER_FRAMES[state.spinner_frame];
-        let spinner_line = Line::from(vec![Span::styled(
-            format!("decrypting…  {frame}"),
-            Style::default().fg(Color::Cyan),
-        )]);
-        let p = Paragraph::new(spinner_line).alignment(Alignment::Center);
-        f.render_widget(p, chunks[2]);
+        state.spinner.draw(f, chunks[2], "decrypting…", Color::Cyan);
     } else if let Some((msg, kind)) = &state.message {
         let style = match kind {
             MessageKind::Info => Style::default().fg(Color::Cyan),
