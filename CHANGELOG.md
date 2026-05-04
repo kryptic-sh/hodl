@@ -13,6 +13,10 @@ and this project adheres to
 - Alpine .apk packaging pipeline (release CI builds .apk in `alpine:latest` and
   uploads it as a release asset; install with
   `apk add --allow-untrusted hodl-*.apk`).
+- Homebrew tap auto-publish for `hodl` on tag push. New
+  `pkg/homebrew/hodl.rb.in` template + `brew-tap` job in `release.yml` renders
+  the formula with the just-uploaded macOS sha256s and pushes it to
+  `kryptic-sh/homebrew-tap`. Install with `brew install kryptic-sh/tap/hodl`.
 
 ## [0.3.1] - 2026-05-05
 

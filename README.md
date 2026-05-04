@@ -40,6 +40,12 @@ hodl/
 
 ## Install
 
+**macOS (Homebrew)**
+
+```bash
+brew install kryptic-sh/tap/hodl
+```
+
 **Arch Linux (AUR)**
 
 ```bash
