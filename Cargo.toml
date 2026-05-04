@@ -11,6 +11,7 @@ members = [
     "apps/hodl",
     "xtask",
 ]
+default-members = ["apps/hodl"]
 
 [workspace.package]
 version = "0.3.0"
