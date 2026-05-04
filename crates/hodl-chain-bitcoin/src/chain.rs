@@ -155,6 +155,10 @@ impl BitcoinChain {
         self
     }
 
+    pub fn purpose(&self) -> Purpose {
+        self.purpose
+    }
+
     /// Returns the default derivation purpose for this chain's send path.
     ///
     /// - Bip44 (legacy P2PKH) for DOGE and BCH — segwit not deployed.

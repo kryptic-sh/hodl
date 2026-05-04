@@ -119,6 +119,18 @@ impl ActiveChain {
         }
     }
 
+    /// BIP-44-style derivation path for `(account, index)` on the external
+    /// chain (change=0). Bitcoin family uses the chain's actual purpose
+    /// (44 / 49 / 84 / 86); EVM and Monero are pinned at BIP-44.
+    pub fn derivation_path(&self, account: u32, index: u32) -> String {
+        let coin = self.chain_id().slip44();
+        let purpose = match self {
+            ActiveChain::Bitcoin(c) => c.purpose().number(),
+            ActiveChain::Ethereum(_) | ActiveChain::Monero(_) => 44,
+        };
+        format!("m/{purpose}'/{coin}'/{account}'/0/{index}")
+    }
+
     pub fn derive(&self, seed: &[u8; 64], account: u32, index: u32) -> Result<Address> {
         match self {
             ActiveChain::Bitcoin(c) => c.derive(seed, account, index),

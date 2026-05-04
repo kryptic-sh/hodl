@@ -19,7 +19,7 @@ pub enum Purpose {
 }
 
 impl Purpose {
-    fn value(self) -> u32 {
+    pub fn number(self) -> u32 {
         match self {
             Purpose::Bip44 => 44,
             Purpose::Bip49 => 49,
@@ -58,7 +58,7 @@ fn validate_purpose(purpose: Purpose, params: &NetworkParams) -> Result<()> {
     } else {
         Err(Error::Codec(format!(
             "BIP-{} not deployed on {}",
-            purpose.value(),
+            purpose.number(),
             chain.display_name()
         )))
     }
@@ -95,7 +95,7 @@ pub fn derive_xprv(
 ) -> Result<XPrv> {
     validate_purpose(purpose, params)?;
     let coin = params.chain_id.slip44();
-    let path_s = path_str(purpose.value(), coin, account, change, index);
+    let path_s = path_str(purpose.number(), coin, account, change, index);
     let parsed: DerivationPath = path_s
         .parse()
         .map_err(|e: bip32::Error| Error::Chain(format!("derivation path: {e}")))?;
@@ -118,7 +118,7 @@ pub fn derive_address(
 ) -> Result<String> {
     validate_purpose(purpose, params)?;
     let coin = params.chain_id.slip44();
-    let path_s = path_str(purpose.value(), coin, account, change, index);
+    let path_s = path_str(purpose.number(), coin, account, change, index);
     let parsed: DerivationPath = path_s
         .parse()
         .map_err(|e: bip32::Error| Error::Chain(format!("derivation path: {e}")))?;

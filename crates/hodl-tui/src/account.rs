@@ -120,8 +120,7 @@ impl AccountState {
                     None
                 }
             };
-            let slip44 = self.current_chain.slip44();
-            let path = format!("m/44'/{slip44}'/0'/0/{index}");
+            let path = active.derivation_path(0, index);
             rows.push(AccountRow {
                 index,
                 path,
@@ -263,7 +262,11 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .split(inner);
 
     if let Some(msg) = &state.flash {
@@ -322,12 +325,30 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
         f.render_stateful_widget(table, chunks[0], &mut state.table_state);
     }
 
+    if !state.rows.is_empty() {
+        let synced = state.rows.iter().filter(|r| r.balance.is_some()).count();
+        let total = state.rows.len();
+        let (label, color) = if synced == total {
+            (format!("synced {synced}/{total}"), Color::Green)
+        } else if synced == 0 {
+            ("sync failed — endpoint unreachable".into(), Color::Red)
+        } else {
+            (format!("synced {synced}/{total} (partial)"), Color::Yellow)
+        };
+        let sync = Paragraph::new(Line::from(Span::styled(
+            format!("{} · {}", state.current_chain.display_name(), label),
+            Style::default().fg(color),
+        )))
+        .alignment(Alignment::Center);
+        f.render_widget(sync, chunks[1]);
+    }
+
     let hint = Paragraph::new(Line::from(Span::styled(
         "j/k move • r receive • s send • b book • S settings • p picker • q lock",
         Style::default().fg(Color::DarkGray),
     )))
     .alignment(Alignment::Center);
-    f.render_widget(hint, chunks[1]);
+    f.render_widget(hint, chunks[2]);
 
     // Picker overlay drawn on top.
     if state.picker.is_some() {
