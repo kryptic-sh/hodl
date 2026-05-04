@@ -39,6 +39,7 @@ use tracing::debug;
 use hodl_wallet::UnlockedWallet;
 
 use crate::active_chain::{ActiveChain, SendOpts};
+use crate::help::{HelpAction, HelpOverlay};
 
 // ── Field indices ──────────────────────────────────────────────────────────
 
@@ -220,6 +221,43 @@ impl SendState {
         }
     }
 
+    /// Keybind reference for the contextual help overlay.
+    /// Mode-aware: form-input binds when in Insert mode, navigation binds otherwise.
+    ///
+    /// `F1` is used as the help trigger instead of `?` so `?` can still be typed
+    /// in form fields while in Insert mode.
+    pub fn help_lines(&self) -> Vec<(String, String)> {
+        match &self.phase {
+            Phase::Form => {
+                if self.form.mode == FormMode::Insert {
+                    vec![
+                        ("Esc".into(), "Return to Normal mode".into()),
+                        ("F1".into(), "Show this help".into()),
+                    ]
+                } else {
+                    vec![
+                        ("i".into(), "Enter Insert mode to edit field".into()),
+                        ("Tab / j / k".into(), "Move focus between fields".into()),
+                        ("h / l".into(), "Cycle select/checkbox options".into()),
+                        ("Enter".into(), "Submit (on Sign & broadcast field)".into()),
+                        ("Esc".into(), "Back to accounts".into()),
+                        ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
+                        ("F1".into(), "Show this help".into()),
+                    ]
+                }
+            }
+            Phase::Result(_) => vec![
+                ("Enter / q / Esc".into(), "Return to accounts".into()),
+                ("F1".into(), "Show this help".into()),
+            ],
+            Phase::Error(_) => vec![
+                ("q / Esc".into(), "Back to accounts".into()),
+                ("any other".into(), "Clear error, return to form".into()),
+                ("F1".into(), "Show this help".into()),
+            ],
+        }
+    }
+
     fn try_submit(&mut self, wallet: &UnlockedWallet) {
         let recipient_str = self.field_text(FIELD_RECIPIENT);
         if let Err(e) = validate_recipient(&recipient_str, self.chain) {
@@ -397,8 +435,16 @@ pub fn event_loop<B: Backend>(
 where
     B::Error: Send + Sync + 'static,
 {
+    let mut help_overlay: Option<HelpOverlay> = None;
+
     loop {
-        terminal.draw(|f| draw(f, state))?;
+        terminal.draw(|f| {
+            let area = f.area();
+            draw(f, state);
+            if let Some(ref overlay) = help_overlay {
+                overlay.draw(f, area);
+            }
+        })?;
 
         if !event::poll(std::time::Duration::from_millis(250))? {
             continue;
@@ -410,6 +456,21 @@ where
                     && matches!(k.code, KeyCode::Char('c') | KeyCode::Char('d'))
                 {
                     return Ok(SendAction::Quit);
+                }
+
+                // Overlay absorbs all keys when open.
+                if let Some(ref mut overlay) = help_overlay {
+                    if overlay.handle_key(k) == HelpAction::Close {
+                        help_overlay = None;
+                    }
+                    continue;
+                }
+
+                // F1 opens the help overlay from any phase/mode.
+                // `?` is not used here so it can still be typed in form fields.
+                if k.code == KeyCode::F(1) {
+                    help_overlay = Some(HelpOverlay::new("Send", state.help_lines()));
+                    continue;
                 }
 
                 // Result pane: Enter or q returns to accounts.

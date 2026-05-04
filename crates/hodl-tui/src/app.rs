@@ -18,6 +18,7 @@ use hodl_wallet::{UnlockedWallet, Wallet};
 use crate::account::{self, AccountAction, AccountState};
 use crate::address_book::{self, AddressBookAction, AddressBookState};
 use crate::clipboard::ClipboardHandle;
+use crate::help::{HelpAction, HelpOverlay};
 use crate::lock::{self, Outcome as LockOutcome};
 use crate::onboarding::{self, OnboardingMode, OnboardingOutcome, OnboardingState};
 use crate::receive::{self, ReceiveAction, ReceiveState};
@@ -49,6 +50,8 @@ pub struct App {
     idle_timeout: Duration,
     last_activity: Instant,
     clipboard: ClipboardHandle,
+    /// Contextual help overlay; drawn on top of the active screen when `Some`.
+    help_overlay: Option<HelpOverlay>,
 }
 
 impl App {
@@ -66,6 +69,7 @@ impl App {
             idle_timeout,
             last_activity: Instant::now(),
             clipboard,
+            help_overlay: None,
         })
     }
 
@@ -83,6 +87,7 @@ impl App {
             idle_timeout,
             last_activity: Instant::now(),
             clipboard,
+            help_overlay: None,
         })
     }
 
@@ -101,6 +106,7 @@ impl App {
             idle_timeout,
             last_activity: Instant::now(),
             clipboard,
+            help_overlay: None,
         })
     }
 
@@ -122,6 +128,7 @@ impl App {
             idle_timeout,
             last_activity: Instant::now(),
             clipboard,
+            help_overlay: None,
         })
     }
 
@@ -186,8 +193,12 @@ impl App {
 
                     if !event::poll(Duration::from_millis(250))? {
                         terminal.draw(|f| {
+                            let area = f.area();
                             if let Screen::Accounts(s) = &mut self.screen {
-                                account::draw(f, f.area(), s);
+                                account::draw(f, area, s);
+                            }
+                            if let Some(ref overlay) = self.help_overlay {
+                                overlay.draw(f, area);
                             }
                         })?;
                         continue;
@@ -196,6 +207,26 @@ impl App {
                     let ev = event::read()?;
                     if matches!(&ev, Event::Key(k) if k.kind == KeyEventKind::Press) {
                         self.last_activity = Instant::now();
+                    }
+
+                    // Overlay absorbs all keys when open.
+                    if let Some(ref mut overlay) = self.help_overlay {
+                        if let Event::Key(k) = ev
+                            && k.kind == KeyEventKind::Press
+                            && overlay.handle_key(k) == HelpAction::Close
+                        {
+                            self.help_overlay = None;
+                        }
+                        terminal.draw(|f| {
+                            let area = f.area();
+                            if let Screen::Accounts(s) = &mut self.screen {
+                                account::draw(f, area, s);
+                            }
+                            if let Some(ref overlay) = self.help_overlay {
+                                overlay.draw(f, area);
+                            }
+                        })?;
+                        continue;
                     }
 
                     let action = match &mut self.screen {
@@ -252,10 +283,17 @@ impl App {
                         Some(AccountAction::OpenSettings) => {
                             self.screen = Screen::Settings;
                         }
+                        Some(AccountAction::ShowHelp) => {
+                            if let Screen::Accounts(s) = &self.screen {
+                                self.help_overlay =
+                                    Some(HelpOverlay::new("Accounts", s.help_lines()));
+                            }
+                        }
                         None => {
                             terminal.draw(|f| {
+                                let area = f.area();
                                 if let Screen::Accounts(s) = &mut self.screen {
-                                    account::draw(f, f.area(), s);
+                                    account::draw(f, area, s);
                                 }
                             })?;
                         }
@@ -264,8 +302,12 @@ impl App {
                 Screen::AddressBook(_) => {
                     if !event::poll(Duration::from_millis(250))? {
                         terminal.draw(|f| {
+                            let area = f.area();
                             if let Screen::AddressBook(s) = &mut self.screen {
-                                address_book::draw(f, f.area(), s);
+                                address_book::draw(f, area, s);
+                            }
+                            if let Some(ref overlay) = self.help_overlay {
+                                overlay.draw(f, area);
                             }
                         })?;
                         continue;
@@ -274,6 +316,26 @@ impl App {
                     let ev = event::read()?;
                     if matches!(&ev, Event::Key(k) if k.kind == KeyEventKind::Press) {
                         self.last_activity = Instant::now();
+                    }
+
+                    // Overlay absorbs all keys when open.
+                    if let Some(ref mut overlay) = self.help_overlay {
+                        if let Event::Key(k) = ev
+                            && k.kind == KeyEventKind::Press
+                            && overlay.handle_key(k) == HelpAction::Close
+                        {
+                            self.help_overlay = None;
+                        }
+                        terminal.draw(|f| {
+                            let area = f.area();
+                            if let Screen::AddressBook(s) = &mut self.screen {
+                                address_book::draw(f, area, s);
+                            }
+                            if let Some(ref overlay) = self.help_overlay {
+                                overlay.draw(f, area);
+                            }
+                        })?;
+                        continue;
                     }
 
                     let action = match &mut self.screen {
@@ -300,10 +362,17 @@ impl App {
                             self.screen = Screen::Accounts(Box::new(acc_state));
                         }
                         Some(AddressBookAction::Quit) => return Ok(()),
+                        Some(AddressBookAction::ShowHelp) => {
+                            if let Screen::AddressBook(s) = &self.screen {
+                                self.help_overlay =
+                                    Some(HelpOverlay::new("Address Book", s.help_lines()));
+                            }
+                        }
                         None => {
                             terminal.draw(|f| {
+                                let area = f.area();
                                 if let Screen::AddressBook(s) = &mut self.screen {
-                                    address_book::draw(f, f.area(), s);
+                                    address_book::draw(f, area, s);
                                 }
                             })?;
                         }
@@ -312,8 +381,12 @@ impl App {
                 Screen::Receive(_) => {
                     if !event::poll(Duration::from_millis(250))? {
                         terminal.draw(|f| {
+                            let area = f.area();
                             if let Screen::Receive(s) = &mut self.screen {
-                                receive::draw(f, f.area(), s);
+                                receive::draw(f, area, s);
+                            }
+                            if let Some(ref overlay) = self.help_overlay {
+                                overlay.draw(f, area);
                             }
                         })?;
                         continue;
@@ -322,6 +395,26 @@ impl App {
                     let ev = event::read()?;
                     if matches!(&ev, Event::Key(k) if k.kind == KeyEventKind::Press) {
                         self.last_activity = Instant::now();
+                    }
+
+                    // Overlay absorbs all keys when open.
+                    if let Some(ref mut overlay) = self.help_overlay {
+                        if let Event::Key(k) = ev
+                            && k.kind == KeyEventKind::Press
+                            && overlay.handle_key(k) == HelpAction::Close
+                        {
+                            self.help_overlay = None;
+                        }
+                        terminal.draw(|f| {
+                            let area = f.area();
+                            if let Screen::Receive(s) = &mut self.screen {
+                                receive::draw(f, area, s);
+                            }
+                            if let Some(ref overlay) = self.help_overlay {
+                                overlay.draw(f, area);
+                            }
+                        })?;
+                        continue;
                     }
 
                     let action = match &mut self.screen {
@@ -348,10 +441,17 @@ impl App {
                             self.screen = Screen::Accounts(Box::new(acc_state));
                         }
                         Some(ReceiveAction::Quit) => return Ok(()),
+                        Some(ReceiveAction::ShowHelp) => {
+                            if let Screen::Receive(s) = &self.screen {
+                                self.help_overlay =
+                                    Some(HelpOverlay::new("Receive", s.help_lines()));
+                            }
+                        }
                         None => {
                             terminal.draw(|f| {
+                                let area = f.area();
                                 if let Screen::Receive(s) = &mut self.screen {
-                                    receive::draw(f, f.area(), s);
+                                    receive::draw(f, area, s);
                                 }
                             })?;
                         }
@@ -417,6 +517,7 @@ impl App {
         self.unlocked = None;
         self.screen = Screen::Lock;
         self.last_activity = Instant::now();
+        self.help_overlay = None;
     }
 }
 

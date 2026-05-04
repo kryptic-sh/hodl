@@ -25,6 +25,8 @@ use hodl_wallet::Wallet;
 use hodl_wallet::mnemonic::{self, WordCount};
 use hodl_wallet::vault::KdfParams;
 
+use crate::help::{HelpAction, HelpOverlay};
+
 /// Result of onboarding — either a ready wallet or a user quit.
 #[derive(Debug)]
 pub enum OnboardingOutcome {
@@ -178,6 +180,46 @@ impl OnboardingState {
             message: None,
             data_root,
             wallet_name,
+        }
+    }
+
+    /// Keybind reference for the contextual help overlay.
+    /// Sub-state-aware: Confirm pane binds differ from Form binds.
+    ///
+    /// `F1` is used as the help trigger instead of `?` so `?` can still be
+    /// typed in form fields while in Insert mode.
+    pub fn help_lines(&self) -> Vec<(String, String)> {
+        match &self.phase {
+            Phase::Confirm(_) => vec![
+                ("Enter".into(), "Confirm mnemonic written — continue".into()),
+                ("Esc".into(), "Back to form".into()),
+                ("F1".into(), "Show this help".into()),
+            ],
+            Phase::Form => {
+                if self.form.mode == FormMode::Insert {
+                    vec![
+                        ("Esc".into(), "Return to Normal mode".into()),
+                        ("F1".into(), "Show this help".into()),
+                    ]
+                } else {
+                    let mode_name = match self.mode {
+                        OnboardingMode::Create => "Create wallet",
+                        OnboardingMode::Restore => "Restore wallet",
+                    };
+                    vec![
+                        (
+                            "i".into(),
+                            format!("Enter Insert mode to fill {}", mode_name),
+                        ),
+                        ("Tab / j / k".into(), "Move focus between fields".into()),
+                        ("h / l".into(), "Cycle select options".into()),
+                        ("Enter".into(), "Submit (on Submit field)".into()),
+                        ("Esc".into(), "Quit onboarding".into()),
+                        ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
+                        ("F1".into(), "Show this help".into()),
+                    ]
+                }
+            }
         }
     }
 
@@ -349,8 +391,16 @@ pub fn event_loop<B: Backend>(
 where
     B::Error: Send + Sync + 'static,
 {
+    let mut help_overlay: Option<HelpOverlay> = None;
+
     loop {
-        terminal.draw(|f| draw(f, state))?;
+        terminal.draw(|f| {
+            let area = f.area();
+            draw(f, state);
+            if let Some(ref overlay) = help_overlay {
+                overlay.draw(f, area);
+            }
+        })?;
 
         if !event::poll(std::time::Duration::from_millis(250))? {
             continue;
@@ -362,6 +412,27 @@ where
                     && matches!(k.code, KeyCode::Char('c') | KeyCode::Char('d'))
                 {
                     return Ok(OnboardingOutcome::Quit);
+                }
+
+                // Overlay absorbs all keys when open.
+                if let Some(ref mut overlay) = help_overlay {
+                    if overlay.handle_key(k) == HelpAction::Close {
+                        help_overlay = None;
+                    }
+                    continue;
+                }
+
+                // F1 opens the help overlay from any sub-state/mode.
+                // `?` is not used here so it can still be typed in form fields.
+                if k.code == KeyCode::F(1) {
+                    help_overlay = Some(HelpOverlay::new(
+                        match state.mode {
+                            OnboardingMode::Create => "Create wallet",
+                            OnboardingMode::Restore => "Restore wallet",
+                        },
+                        state.help_lines(),
+                    ));
+                    continue;
                 }
 
                 match &state.phase {

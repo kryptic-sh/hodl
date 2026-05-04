@@ -30,6 +30,8 @@ use zeroize::Zeroize;
 
 use hodl_wallet::{UnlockedWallet, Wallet, storage::list_wallets};
 
+use crate::help::{HelpAction, HelpOverlay};
+
 /// Outcome reported back to the caller.
 #[derive(Debug)]
 pub enum Outcome {
@@ -51,9 +53,16 @@ where
     B::Error: Send + Sync + 'static,
 {
     let mut state = LockState::new();
+    let mut help_overlay: Option<HelpOverlay> = None;
 
     loop {
-        terminal.draw(|f| draw_locked(f, f.area(), &mut state))?;
+        terminal.draw(|f| {
+            let area = f.area();
+            draw_locked(f, area, &mut state);
+            if let Some(ref overlay) = help_overlay {
+                overlay.draw(f, area);
+            }
+        })?;
 
         if state.last_activity.elapsed() >= idle_timeout {
             state.last_activity = Instant::now();
@@ -69,6 +78,21 @@ where
         match event::read()? {
             Event::Key(k) if k.kind == KeyEventKind::Press => {
                 state.last_activity = Instant::now();
+
+                // Overlay absorbs all keys when open.
+                if let Some(ref mut overlay) = help_overlay {
+                    if overlay.handle_key(k) == HelpAction::Close {
+                        help_overlay = None;
+                    }
+                    continue;
+                }
+
+                // `?` in Normal mode opens the help overlay.
+                if k.code == KeyCode::Char('?') && state.form.mode == FormMode::Normal {
+                    help_overlay = Some(HelpOverlay::new("Lock", state.help_lines()));
+                    continue;
+                }
+
                 match handle_key(&mut state, wallet, k, data_root) {
                     Some(o) => return Ok(o),
                     None => continue,
@@ -110,6 +134,18 @@ impl LockState {
             last_activity: Instant::now(),
             picker: None,
         }
+    }
+
+    /// Keybind reference for the contextual help overlay.
+    pub fn help_lines(&self) -> Vec<(String, String)> {
+        vec![
+            ("i".into(), "Enter insert mode (type password)".into()),
+            ("Esc".into(), "Return to Normal mode / quit".into()),
+            ("Enter".into(), "Submit password".into()),
+            ("w".into(), "Open wallet switcher".into()),
+            ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
+            ("?".into(), "Show this help".into()),
+        ]
     }
 
     /// Extract the password bytes, wipe the field, then attempt unlock.

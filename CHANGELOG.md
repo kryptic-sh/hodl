@@ -10,6 +10,18 @@ and this project adheres to
 
 ### Added
 
+- **Contextual help overlay (`?` / `F1`) per screen** — every TUI screen now
+  exposes a `help_lines() -> Vec<(String, String)>` method listing its actual
+  keybindings. Pressing `?` (or `F1` on form-input screens where `?` can be
+  typed) opens a centred, scrollable two-column overlay (`key | description`)
+  drawn on top of the active screen. `Esc`, `q`, or `?` closes it; `j`/`k` /
+  `↓`/`↑` scroll; `g`/`Home` jumps to top; `G`/`End` to bottom. Implemented in
+  new module `hodl-tui::help` (`HelpOverlay`, `HelpAction`). Lock, Accounts,
+  AddressBook, and Receive screens use `?`; Send and Onboarding use `F1` so `?`
+  remains typeable in form fields. Help lines are modal-aware: Send returns
+  form-edit binds in Insert mode and navigation binds otherwise; Onboarding
+  returns Confirm-pane binds during the mnemonic-confirmation gate.
+
 - **`cargo-deny` in CI** — strict gate on advisories, licenses, bans
   (multiple-versions, wildcards), and sources. Workspace `toml` bumped from
   `0.8` to `1` to match `hjkl-config` and collapse the

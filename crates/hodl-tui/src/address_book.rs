@@ -25,6 +25,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table, TableState}
 pub enum AddressBookAction {
     Close,
     Quit,
+    /// Open the contextual help overlay.
+    ShowHelp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,6 +193,39 @@ impl AddressBookState {
         self.mode = Mode::List;
     }
 
+    /// Keybind reference for the contextual help overlay.
+    /// Mode-aware: returns different binds depending on current mode.
+    pub fn help_lines(&self) -> Vec<(String, String)> {
+        match self.mode {
+            Mode::List => vec![
+                ("j / ↓".into(), "Move selection down".into()),
+                ("k / ↑".into(), "Move selection up".into()),
+                ("a".into(), "Add new contact".into()),
+                ("d".into(), "Delete selected contact".into()),
+                ("Enter / q / Esc".into(), "Close address book".into()),
+                ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
+                ("?".into(), "Show this help".into()),
+            ],
+            Mode::Add => vec![
+                ("i".into(), "Enter insert mode to edit".into()),
+                ("Esc".into(), "Back to Normal / cancel add".into()),
+                ("Tab / j / k".into(), "Move focus between fields".into()),
+                ("Enter".into(), "Save contact".into()),
+                ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
+                ("?".into(), "Show this help".into()),
+            ],
+            Mode::ConfirmDelete(_) => vec![
+                ("y / Y".into(), "Confirm delete".into()),
+                ("any other".into(), "Cancel delete".into()),
+            ],
+            Mode::ChainPicker => vec![
+                ("j / ↓ / k / ↑".into(), "Navigate chains".into()),
+                ("Enter".into(), "Select chain".into()),
+                ("Esc".into(), "Cancel".into()),
+            ],
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<AddressBookAction> {
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
@@ -231,6 +266,7 @@ impl AddressBookState {
                 None
             }
             KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => Some(AddressBookAction::Close),
+            KeyCode::Char('?') => Some(AddressBookAction::ShowHelp),
             _ => None,
         }
     }

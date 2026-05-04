@@ -47,6 +47,8 @@ pub enum AccountAction {
     Lock,
     /// Quit the application.
     Quit,
+    /// Open the contextual help overlay.
+    ShowHelp,
 }
 
 /// A single row in the account table.
@@ -165,6 +167,22 @@ impl AccountState {
         self.picker = Some(hjkl_picker::Picker::new(Box::new(source)));
     }
 
+    /// Keybind reference for the contextual help overlay.
+    pub fn help_lines(&self) -> Vec<(String, String)> {
+        vec![
+            ("j / ↓".into(), "Move selection down".into()),
+            ("k / ↑".into(), "Move selection up".into()),
+            ("r".into(), "Open receive screen".into()),
+            ("s".into(), "Open send screen".into()),
+            ("b".into(), "Open address book".into()),
+            ("S".into(), "Open settings".into()),
+            ("p".into(), "Open chain picker".into()),
+            ("q / Esc".into(), "Lock wallet".into()),
+            ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
+            ("?".into(), "Show this help".into()),
+        ]
+    }
+
     /// Route a keypress. Returns an action when the screen wants to
     /// transition.
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<AccountAction> {
@@ -225,6 +243,7 @@ impl AccountState {
             KeyCode::Char('S') => return Some(AccountAction::OpenSettings),
             KeyCode::Char('p') => self.open_picker(),
             KeyCode::Char('q') | KeyCode::Esc => return Some(AccountAction::Lock),
+            KeyCode::Char('?') => return Some(AccountAction::ShowHelp),
             _ => {}
         }
 

@@ -9,6 +9,7 @@ pub mod active_chain;
 pub mod address_book;
 pub mod app;
 pub mod clipboard;
+pub mod help;
 pub mod lock;
 pub mod onboarding;
 pub mod receive;

@@ -22,6 +22,8 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use crate::help::{HelpAction, HelpOverlay};
+
 /// Action emitted to the parent app loop.
 #[derive(Debug)]
 pub enum SettingsAction {
@@ -107,6 +109,20 @@ impl SettingsState {
         }
     }
 
+    /// Keybind reference for the contextual help overlay.
+    pub fn help_lines(&self) -> Vec<(String, String)> {
+        vec![
+            ("j / k".into(), "Move focus between fields".into()),
+            ("Space".into(), "Toggle checkbox".into()),
+            ("h / l".into(), "Cycle select options".into()),
+            ("i".into(), "Edit text field (Insert mode)".into()),
+            ("Esc".into(), "Normal mode / back without saving".into()),
+            ("Enter".into(), "Save settings (on Save field)".into()),
+            ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
+            ("?".into(), "Show this help".into()),
+        ]
+    }
+
     fn try_save(&mut self, base: &Config) -> Option<Config> {
         let cfg = self.read_config(base);
         let toml_str = match toml::to_string_pretty(&cfg) {
@@ -135,8 +151,16 @@ pub fn event_loop<B: Backend>(
 where
     B::Error: Send + Sync + 'static,
 {
+    let mut help_overlay: Option<HelpOverlay> = None;
+
     loop {
-        terminal.draw(|f| draw(f, f.area(), state))?;
+        terminal.draw(|f| {
+            let area = f.area();
+            draw(f, area, state);
+            if let Some(ref overlay) = help_overlay {
+                overlay.draw(f, area);
+            }
+        })?;
 
         if !event::poll(std::time::Duration::from_millis(250))? {
             continue;
@@ -148,6 +172,20 @@ where
                     && matches!(k.code, KeyCode::Char('c') | KeyCode::Char('d'))
                 {
                     return Ok(SettingsAction::Quit);
+                }
+
+                // Overlay absorbs all keys when open.
+                if let Some(ref mut overlay) = help_overlay {
+                    if overlay.handle_key(k) == HelpAction::Close {
+                        help_overlay = None;
+                    }
+                    continue;
+                }
+
+                // `?` in Normal mode opens the help overlay.
+                if k.code == KeyCode::Char('?') && state.form.mode == FormMode::Normal {
+                    help_overlay = Some(HelpOverlay::new("Settings", state.help_lines()));
+                    continue;
                 }
 
                 if k.code == KeyCode::Enter && state.form.mode == FormMode::Normal {

@@ -25,6 +25,8 @@ pub enum ReceiveAction {
     Back,
     /// Quit the application.
     Quit,
+    /// Open the contextual help overlay.
+    ShowHelp,
 }
 
 pub struct ReceiveState {
@@ -45,6 +47,16 @@ impl ReceiveState {
         }
     }
 
+    /// Keybind reference for the contextual help overlay.
+    pub fn help_lines(&self) -> Vec<(String, String)> {
+        vec![
+            ("y".into(), "Copy address to clipboard".into()),
+            ("q / Esc".into(), "Back to accounts".into()),
+            ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
+            ("?".into(), "Show this help".into()),
+        ]
+    }
+
     pub fn handle_key(
         &mut self,
         key: KeyEvent,
@@ -62,6 +74,7 @@ impl ReceiveState {
                 self.yank_flash = Some("address copied to clipboard".into());
             }
             KeyCode::Char('q') | KeyCode::Esc => return Some(ReceiveAction::Back),
+            KeyCode::Char('?') => return Some(ReceiveAction::ShowHelp),
             _ => {}
         }
 
