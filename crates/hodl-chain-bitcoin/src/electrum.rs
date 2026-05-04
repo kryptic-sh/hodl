@@ -31,29 +31,6 @@ impl ElectrumClient {
         }
     }
 
-    /// Construct a client with no network connection.
-    ///
-    /// The resulting client panics on any RPC call. Use only where the
-    /// caller never invokes any Electrum method — e.g. address derivation
-    /// via `BitcoinChain::derive` which is pure crypto.
-    pub fn new_unconnected() -> Self {
-        struct NullTransport;
-        impl std::io::Read for NullTransport {
-            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-                panic!("ElectrumClient::new_unconnected: attempted network read")
-            }
-        }
-        impl Write for NullTransport {
-            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
-                panic!("ElectrumClient::new_unconnected: attempted network write")
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        Self::from_transport(Box::new(NullTransport))
-    }
-
     /// Open a plain TCP connection.
     pub fn connect_tcp(host: &str, port: u16) -> Result<Self> {
         let stream = TcpStream::connect((host, port))

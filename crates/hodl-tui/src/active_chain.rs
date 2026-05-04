@@ -132,62 +132,6 @@ impl ActiveChain {
         }
     }
 
-    /// Derive a single address for `id` without opening any network connection.
-    ///
-    /// Uses chain-parameter constants only (no Electrum/RPC/LWS dial). Safe to
-    /// call on the UI thread or in a fast pre-network spawn. The returned
-    /// `Address` is identical to what `from_chain_id(id, …)?.derive(…)` would
-    /// produce — only the balance fields require a live connection.
-    pub fn derive_no_network(
-        id: ChainId,
-        seed: &[u8; 64],
-        account: u32,
-        index: u32,
-    ) -> Result<Address> {
-        match id {
-            ChainId::Bitcoin
-            | ChainId::BitcoinTestnet
-            | ChainId::Litecoin
-            | ChainId::Dogecoin
-            | ChainId::BitcoinCash
-            | ChainId::NavCoin => {
-                // BitcoinChain::derive uses only self.params — no Electrum call.
-                // Build a dummy client-less chain using a stub that panics on
-                // any I/O method; derive never calls it.
-                let params = btc_network_params(id);
-                // Use a null ElectrumClient stand-in via a separate derive path
-                // that takes params directly from the derive crate.
-                use hodl_chain_bitcoin::BitcoinChain;
-                use hodl_chain_bitcoin::electrum::ElectrumClient;
-                // Safety: ElectrumClient::new_unconnected is network-free.
-                let dummy = ElectrumClient::new_unconnected();
-                let chain = BitcoinChain::new(params, dummy);
-                chain.derive(seed, account, index)
-            }
-            ChainId::Ethereum | ChainId::BscMainnet => {
-                // EthereumChain::derive is pure crypto; EthRpcClient::new does
-                // not open a connection until the first RPC call.
-                use hodl_chain_ethereum::{EthRpcClient, EthereumChain};
-                let params = eth_network_params(id);
-                let rpc = EthRpcClient::new("http://localhost".into());
-                let chain = EthereumChain::new(params, rpc);
-                chain.derive(seed, account, index)
-            }
-            ChainId::Monero => {
-                // MoneroChain::derive ignores account/index and uses only the
-                // address_prefix from NetworkParams; lws=None is fine.
-                use hodl_chain_monero::{
-                    LwsClient, MoneroChain, NetworkParams as XmrNetworkParams,
-                };
-                let chain = MoneroChain::new(XmrNetworkParams::MAINNET, None, None);
-                // MoneroChain::derive accepts an Option<LwsClient>; with None it
-                // still derives the primary address (no network).
-                let _ = LwsClient::new; // keep import used
-                chain.derive(seed, account, index)
-            }
-        }
-    }
-
     pub fn balance(&self, addr: &Address) -> Result<Amount> {
         match self {
             ActiveChain::Bitcoin(c) => c.balance(addr),
