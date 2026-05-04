@@ -18,6 +18,17 @@ and this project adheres to
   `NAVCOIN_MAINNET`. The newer **Navio** chain (Navio-project, distinct fork) is
   deferred to a future release as a sibling `NetworkParams` record.
 
+### Added
+
+- Curated default Electrum endpoint list ships in `Config::default()` for every
+  BTC-family chain (BTC mainnet + testnet, BCH, LTC, DOGE, NAV). Five TLS-only
+  servers per chain where available; one for NAV (only public server alive).
+  Sourced from the `1209k.com/bitcoin-eye` reliability monitor on 2026-05-04.
+  The wallet still does not phone home on its own — endpoints are only contacted
+  when the user opens accounts / receive / send. EVM (ETH/BSC) and Monero remain
+  endpoint-empty by default: EVM needs a per-user API key and Monero LWS leaks
+  the view key to the operator (privacy-conservative default = self-host).
+
 ### Removed
 
 - **BREAKING:** dropped Bitcoin SV (BSV) and eCash (XEC). Both sit deep outside

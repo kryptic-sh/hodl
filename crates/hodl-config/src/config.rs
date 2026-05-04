@@ -78,10 +78,16 @@ pub enum KdfPreset {
 }
 
 /// Top-level hodl config.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Config::default()` populates `chains` with curated public Electrum
+/// endpoints for the BTC family (BTC mainnet + testnet, BCH, LTC, DOGE,
+/// NAV). The wallet still does not phone home on its own — it only contacts
+/// these servers when the user opens the accounts / receive / send screens.
+/// EVM (ETH/BSC) and Monero have no built-in defaults: EVM JSON-RPC needs
+/// per-user API keys (Infura/Alchemy/etc.), and Monero LWS leaks the view
+/// key to the operator so the privacy-conservative default is "self-host".
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
-    /// Per-chain endpoint lists and gap-limit overrides. Empty by default —
-    /// the user must opt in to endpoints. Never phones home.
     #[serde(default)]
     pub chains: HashMap<ChainId, ChainConfig>,
     #[serde(default)]
@@ -90,6 +96,94 @@ pub struct Config {
     pub lock: LockConfig,
     #[serde(default)]
     pub kdf: KdfPreset,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            chains: default_chains(),
+            tor: TorConfig::default(),
+            lock: LockConfig::default(),
+            kdf: KdfPreset::default(),
+        }
+    }
+}
+
+/// Curated public-Electrum endpoint defaults. All TLS. Sourced from
+/// `1209k.com/bitcoin-eye` reliability monitor on 2026-05-04.
+fn default_chains() -> HashMap<ChainId, ChainConfig> {
+    use Endpoint::Electrum;
+
+    fn cc(endpoints: Vec<Endpoint>) -> ChainConfig {
+        ChainConfig {
+            endpoints,
+            gap_limit: default_gap_limit(),
+        }
+    }
+    fn ssl(host: &str, port: u16) -> Endpoint {
+        Electrum {
+            url: format!("ssl://{host}:{port}"),
+            tls: true,
+        }
+    }
+
+    let mut m = HashMap::new();
+    m.insert(
+        ChainId::Bitcoin,
+        cc(vec![
+            ssl("electrum.blockstream.info", 50002),
+            ssl("electrum.bullbitcoin.com", 50002),
+            ssl("electrum.acinq.co", 50002),
+            ssl("electrum.bitaroo.net", 50002),
+            ssl("electrum.emzy.de", 50002),
+        ]),
+    );
+    m.insert(
+        ChainId::BitcoinTestnet,
+        cc(vec![
+            ssl("testnet.aranguren.org", 51002),
+            ssl("testnet.qtornado.com", 51002),
+            ssl("electrum.blockstream.info", 60002),
+            ssl("ax101.blockeng.ch", 60002),
+            ssl("v22019051929289916.bestsrv.de", 50002),
+        ]),
+    );
+    m.insert(
+        ChainId::Litecoin,
+        cc(vec![
+            ssl("electrum1.cipig.net", 20063),
+            ssl("electrum2.cipig.net", 20063),
+            ssl("electrum3.cipig.net", 20063),
+            ssl("backup.electrum-ltc.org", 50002),
+            ssl("litecoin.stackwallet.com", 20063),
+        ]),
+    );
+    m.insert(
+        ChainId::BitcoinCash,
+        cc(vec![
+            ssl("bch.soul-dev.com", 50002),
+            ssl("electrum.imaginary.cash", 50002),
+            ssl("fulcrum.aglauck.com", 50002),
+            ssl("electroncash.dk", 50002),
+            ssl("bch0.kister.net", 50002),
+        ]),
+    );
+    m.insert(
+        ChainId::Dogecoin,
+        cc(vec![
+            ssl("dogecoin.stackwallet.com", 50022),
+            ssl("electrum1.cipig.net", 20060),
+            ssl("electrum2.cipig.net", 20060),
+            ssl("electrum3.cipig.net", 20060),
+            ssl("doge.aftrek.org", 50002),
+        ]),
+    );
+    // NavCoin: only one public Electrum server is currently online.
+    m.insert(
+        ChainId::NavCoin,
+        cc(vec![ssl("electrum3.nav.community", 40002)]),
+    );
+    m
 }
 
 impl Config {
@@ -147,6 +241,54 @@ mod tests {
         let toml_str = toml::to_string_pretty(&cfg).expect("serialize");
         let back: Config = toml::from_str(&toml_str).expect("deserialize");
         assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn defaults_populate_btc_family() {
+        let cfg = Config::default();
+        for chain in [
+            ChainId::Bitcoin,
+            ChainId::BitcoinTestnet,
+            ChainId::Litecoin,
+            ChainId::BitcoinCash,
+            ChainId::Dogecoin,
+            ChainId::NavCoin,
+        ] {
+            let cc = cfg.chains.get(&chain).expect("chain in defaults");
+            assert!(
+                !cc.endpoints.is_empty(),
+                "{chain:?} should have at least one default endpoint"
+            );
+            for ep in &cc.endpoints {
+                match ep {
+                    Endpoint::Electrum { tls, url } => {
+                        assert!(*tls, "{chain:?} default endpoint must be TLS: {url}");
+                        assert!(
+                            url.starts_with("ssl://"),
+                            "{chain:?} url must start with ssl://: {url}"
+                        );
+                    }
+                    other => panic!("{chain:?} default must be Electrum, got {other:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn defaults_skip_evm_and_monero() {
+        let cfg = Config::default();
+        assert!(
+            !cfg.chains.contains_key(&ChainId::Ethereum),
+            "ETH must not have a default RPC (needs user API key)"
+        );
+        assert!(
+            !cfg.chains.contains_key(&ChainId::BscMainnet),
+            "BSC must not have a default RPC"
+        );
+        assert!(
+            !cfg.chains.contains_key(&ChainId::Monero),
+            "Monero must not have a default LWS endpoint (privacy)"
+        );
     }
 
     #[test]
