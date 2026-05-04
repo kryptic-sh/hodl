@@ -339,7 +339,6 @@ mod tests {
         assert!(result.is_err(), "BIP-86 must be rejected on BCH");
     }
 
-
     // --- NavCoin (NAV) tests ---
 
     /// NAV P2PKH — m/44'/130'/0'/0/0 must start with "N" (0x35 prefix).

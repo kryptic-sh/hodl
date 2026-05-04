@@ -205,7 +205,7 @@ mod tests {
         verify_cashaddr(&addr).expect("checksum should be valid");
     }
 
-/// P2SH all-zeros hash (type bit flipped → different address).
+    /// P2SH all-zeros hash (type bit flipped → different address).
     #[test]
     fn p2sh_all_zeros_bch() {
         let hash = [0u8; 20];
