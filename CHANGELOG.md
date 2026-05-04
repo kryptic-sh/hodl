@@ -25,6 +25,14 @@ and this project adheres to
   screen-return paths (`ChainSwitched`, address book, receive, send, settings)
   all call `start_load` instead of the old synchronous `load_accounts`.
 
+- **Send build + broadcast are now off-thread** — submitting the Send form
+  transitions to `Phase::Building` (spawns a thread for `estimate_fee` +
+  `build_send`), then `Phase::Broadcasting` (spawns a thread for
+  `sign_and_broadcast`). Each phase shows an animated `building… ⠋` /
+  `broadcasting… ⠋` spinner at 80 ms cadence. Tab/Enter are blocked during both
+  phases to prevent double-submit; Ctrl-C/D still quits. Seed bytes are zeroized
+  in both threads before exit.
+
 ### Fixed
 
 - **Vault unlock no longer freezes the TUI** — argon2id KDF runs on a background

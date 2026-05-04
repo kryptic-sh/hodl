@@ -8,16 +8,21 @@
 //!   4 = RBF checkbox (BIP-125; Bitcoin only, ignored for non-BTC)
 //!   5 = "Sign & broadcast" SubmitField
 //!
-//! Submit pipeline:
+//! Submit pipeline (all network I/O off the UI thread):
 //!   1. Validate recipient address per active chain codec.
-//!   2. Build `ActiveChain` from `chain_id` + config.
-//!   3. `estimate_fee` via the chain (BTC → SatsPerVbyte, ETH → Gwei). The
-//!      form's fee tier always maps to `estimate_fee`; custom sat/vB is BTC-only.
-//!   4. `build_send` → `PreparedSend`.
-//!   5. `sign_and_broadcast` → `TxId` displayed in result pane.
+//!   2. Build `ActiveChain`, run `estimate_fee` + `build_send` → `PreparedSend`.
+//!      Shown as `building…  ⠋` spinner.
+//!   3. `sign_and_broadcast` → `TxId` displayed in result pane.
+//!      Shown as `broadcasting…  ⠋` spinner.
 //!
 //! After broadcast: result pane shows TxId.
 //! `q` / Esc returns to Accounts.
+//!
+//! Tab/Enter are blocked while building or broadcasting so the user cannot
+//! double-submit. Text editing in form fields is still allowed during the
+//! build phase (the build thread has already captured the values).
+
+use std::sync::mpsc::{self, Receiver};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -35,11 +40,13 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use tracing::debug;
+use zeroize::Zeroize;
 
 use hodl_wallet::UnlockedWallet;
 
-use crate::active_chain::{ActiveChain, SendOpts};
+use crate::active_chain::{ActiveChain, PreparedSend, SendOpts};
 use crate::help::{HelpAction, HelpOverlay};
+use crate::spinner::Spinner;
 
 // ── Field indices ──────────────────────────────────────────────────────────
 
@@ -160,10 +167,26 @@ where
     Box::new(f)
 }
 
+// ── Payload sent between build and broadcast threads ───────────────────────
+
+/// Everything the broadcast thread needs, after the build thread succeeds.
+struct BroadcastPayload {
+    chain: ChainId,
+    config: Config,
+    seed: [u8; 64],
+    account: u32,
+    send_params: hodl_core::SendParams,
+    prepared: PreparedSend,
+}
+
 // ── State machine ──────────────────────────────────────────────────────────
 
 enum Phase {
     Form,
+    /// Off-thread: estimate_fee + build_send. Carries the channel + spinner.
+    Building(Receiver<Result<BroadcastPayload, String>>, Spinner),
+    /// Off-thread: sign_and_broadcast. Carries the channel + spinner.
+    Broadcasting(Receiver<Result<String, String>>, Spinner),
     /// Broadcast succeeded; hold TxId string.
     Result(String),
     /// Submit failed; error message.
@@ -221,6 +244,66 @@ impl SendState {
         }
     }
 
+    /// `true` while a background operation is in flight.
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::Building(_, _) | Phase::Broadcasting(_, _)
+        )
+    }
+
+    /// Poll in-flight channels. Returns `true` if the phase changed.
+    pub fn poll(&mut self) -> bool {
+        use std::sync::mpsc::TryRecvError;
+        match &mut self.phase {
+            Phase::Building(rx, spinner) => {
+                match rx.try_recv() {
+                    Ok(Ok(payload)) => {
+                        // Build succeeded — kick off broadcast thread.
+                        let (tx, brx) = mpsc::channel();
+                        std::thread::spawn(move || {
+                            let result = broadcast_thread(payload);
+                            let _ = tx.send(result);
+                        });
+                        self.phase = Phase::Broadcasting(brx, Spinner::new());
+                        true
+                    }
+                    Ok(Err(msg)) => {
+                        self.phase = Phase::Error(msg);
+                        true
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        self.phase = Phase::Error("build thread panicked — try again".into());
+                        true
+                    }
+                    Err(TryRecvError::Empty) => {
+                        spinner.tick();
+                        false
+                    }
+                }
+            }
+            Phase::Broadcasting(rx, spinner) => match rx.try_recv() {
+                Ok(Ok(txid)) => {
+                    self.phase = Phase::Result(txid);
+                    true
+                }
+                Ok(Err(msg)) => {
+                    self.phase = Phase::Error(msg);
+                    true
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.phase = Phase::Error("broadcast thread panicked — try again".into());
+                    true
+                }
+                Err(TryRecvError::Empty) => {
+                    spinner.tick();
+                    false
+                }
+            },
+            _ => false,
+        }
+    }
+
     /// Keybind reference for the contextual help overlay.
     /// Mode-aware: form-input binds when in Insert mode, navigation binds otherwise.
     ///
@@ -246,6 +329,10 @@ impl SendState {
                     ]
                 }
             }
+            Phase::Building(_, _) | Phase::Broadcasting(_, _) => vec![
+                ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
+                ("F1".into(), "Show this help".into()),
+            ],
             Phase::Result(_) => vec![
                 ("Enter / q / Esc".into(), "Return to accounts".into()),
                 ("F1".into(), "Show this help".into()),
@@ -258,7 +345,9 @@ impl SendState {
         }
     }
 
-    fn try_submit(&mut self, wallet: &UnlockedWallet) {
+    /// Validate inputs and spawn the build thread. Transitions to
+    /// `Phase::Building` on success, `Phase::Error` on validation failure.
+    fn start_build(&mut self, wallet: &UnlockedWallet) {
         let recipient_str = self.field_text(FIELD_RECIPIENT);
         if let Err(e) = validate_recipient(&recipient_str, self.chain) {
             self.phase = Phase::Error(format!("recipient: {e}"));
@@ -273,7 +362,6 @@ impl SendState {
                 return;
             }
         };
-        // Scale to smallest unit: sats for BTC-family, wei for ETH, piconero for XMR.
         let amount_atoms = chain_amount_atoms(self.chain, amount_val);
 
         if amount_atoms > self.total_balance_sats as u128 {
@@ -284,90 +372,126 @@ impl SendState {
             return;
         }
 
-        let active = match ActiveChain::from_chain_id(self.chain, &self.config) {
-            Ok(a) => a,
-            Err(e) => {
-                self.phase = Phase::Error(format!("chain connect: {e}"));
-                return;
-            }
-        };
-
-        // Fee: for Bitcoin, Custom tier reads the sat/vB field. For all other
-        // chains we always call estimate_fee — EVM fee tier semantics differ and
-        // the custom sat/vB field is Bitcoin-only.
-        let fee_rate = if matches!(self.chain, ChainId::Bitcoin | ChainId::BitcoinTestnet)
-            && self.selected_tier().unwrap_or("").starts_with("Custom")
-        {
-            let custom_str = self.field_text(FIELD_CUSTOM_FEE);
-            match custom_str.parse::<u64>() {
-                Ok(v) if v > 0 => FeeRate::SatsPerVbyte {
-                    sats: v,
-                    chain: self.chain,
-                },
+        let is_custom = matches!(self.chain, ChainId::Bitcoin | ChainId::BitcoinTestnet)
+            && self.selected_tier().unwrap_or("").starts_with("Custom");
+        let custom_fee_sats = if is_custom {
+            let s = self.field_text(FIELD_CUSTOM_FEE);
+            match s.parse::<u64>() {
+                Ok(v) if v > 0 => Some(v),
                 _ => {
                     self.phase = Phase::Error("invalid custom fee rate".into());
                     return;
                 }
             }
         } else {
-            let target = self.fee_target_blocks();
-            debug!("estimating fee for {target} blocks on {:?}", self.chain);
-            match active.estimate_fee(target) {
-                Ok(r) => r,
-                Err(e) => {
-                    self.phase = Phase::Error(format!("fee estimate failed: {e}"));
-                    return;
-                }
-            }
+            None
         };
 
+        let chain = self.chain;
+        let config = self.config.clone();
+        let seed: [u8; 64] = *wallet.seed().as_bytes();
+        let account = self.account;
+        let fee_target = self.fee_target_blocks();
         let rbf = self.rbf_checked();
-        let seed = wallet.seed().as_bytes().to_owned();
-        let to_addr = Address::new(recipient_str, self.chain);
-        let amount = Amount::from_atoms(amount_atoms, self.chain);
-        let chain_cfg = self
-            .config
-            .chains
-            .get(&self.chain)
-            .cloned()
-            .unwrap_or_default();
-
+        let chain_cfg = config.chains.get(&chain).cloned().unwrap_or_default();
+        let to_addr = Address::new(recipient_str, chain);
+        let amount = Amount::from_atoms(amount_atoms, chain);
         let send_params = hodl_core::SendParams {
-            from: Address::new(String::new(), self.chain),
+            from: Address::new(String::new(), chain),
             to: to_addr,
             amount,
-            fee: fee_rate,
+            fee: FeeRate::SatsPerVbyte { sats: 1, chain }, // placeholder; overwritten in thread
         };
 
-        debug!(
-            "build_send for account {} on {:?}",
-            self.account, self.chain
-        );
-        let prepared = match active.build_send(
-            &seed,
-            self.account,
-            &send_params,
-            SendOpts {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = build_thread(
+                chain,
+                &config,
+                seed,
+                account,
+                send_params,
+                fee_target,
+                custom_fee_sats,
                 rbf,
-                gap_limit: chain_cfg.gap_limit,
-            },
-        ) {
-            Ok(p) => p,
-            Err(e) => {
-                self.phase = Phase::Error(format!("build: {e}"));
-                return;
-            }
-        };
+                chain_cfg.gap_limit,
+            );
+            // Zeroize local seed copy before thread exits.
+            let mut seed_copy = seed;
+            seed_copy.zeroize();
+            let _ = tx.send(result);
+        });
 
-        match active.sign_and_broadcast(&seed, self.account, &send_params, prepared) {
-            Ok(txid) => {
-                self.phase = Phase::Result(txid.0);
-            }
-            Err(e) => {
-                self.phase = Phase::Error(format!("sign/broadcast: {e}"));
-            }
-        }
+        self.phase = Phase::Building(rx, Spinner::new());
     }
+}
+
+// ── Worker functions ────────────────────────────────────────────────────────
+
+/// Build thread: open chain, estimate fee, build_send. Returns a `BroadcastPayload`.
+#[allow(clippy::too_many_arguments)]
+fn build_thread(
+    chain: ChainId,
+    config: &Config,
+    seed: [u8; 64],
+    account: u32,
+    mut send_params: hodl_core::SendParams,
+    fee_target: u32,
+    custom_fee_sats: Option<u64>,
+    rbf: bool,
+    gap_limit: u32,
+) -> Result<BroadcastPayload, String> {
+    debug!("build_thread for chain {:?}", chain);
+
+    let active =
+        ActiveChain::from_chain_id(chain, config).map_err(|e| format!("chain connect: {e}"))?;
+
+    let fee_rate = if let Some(sats) = custom_fee_sats {
+        FeeRate::SatsPerVbyte { sats, chain }
+    } else {
+        debug!("estimating fee for {fee_target} blocks on {chain:?}");
+        active
+            .estimate_fee(fee_target)
+            .map_err(|e| format!("fee estimate failed: {e}"))?
+    };
+
+    send_params.fee = fee_rate;
+
+    debug!("build_send for account {account} on {chain:?}");
+    let prepared = active
+        .build_send(&seed, account, &send_params, SendOpts { rbf, gap_limit })
+        .map_err(|e| format!("build: {e}"))?;
+
+    Ok(BroadcastPayload {
+        chain,
+        config: config.clone(),
+        seed,
+        account,
+        send_params,
+        prepared,
+    })
+}
+
+/// Broadcast thread: sign + broadcast. Returns the TxId string.
+fn broadcast_thread(mut payload: BroadcastPayload) -> Result<String, String> {
+    debug!("broadcast_thread for chain {:?}", payload.chain);
+
+    let active = ActiveChain::from_chain_id(payload.chain, &payload.config)
+        .map_err(|e| format!("chain connect: {e}"))?;
+
+    let txid = active
+        .sign_and_broadcast(
+            &payload.seed,
+            payload.account,
+            &payload.send_params,
+            payload.prepared,
+        )
+        .map_err(|e| format!("sign/broadcast: {e}"))?;
+
+    // Zeroize seed before returning.
+    payload.seed.zeroize();
+
+    Ok(txid.0)
 }
 
 // ── Form builder ───────────────────────────────────────────────────────────
@@ -379,7 +503,7 @@ fn make_send_form(chain: ChainId, balance_atoms: u64) -> Form {
             .placeholder(recipient_placeholder(chain)),
         1,
     );
-    // Inline form validator; closes over chain. Authoritative check is in try_submit.
+    // Inline form validator; closes over chain. Authoritative check is in start_build.
     recipient_field.validator = Some(mk_validator(move |s| validate_recipient(s, chain)));
 
     let amount_placeholder = format!("0.0 (max {} {})", balance_atoms, chain.ticker());
@@ -438,15 +562,32 @@ where
     let mut help_overlay: Option<HelpOverlay> = None;
 
     loop {
-        terminal.draw(|f| {
-            let area = f.area();
-            draw(f, state);
-            if let Some(ref mut overlay) = help_overlay {
-                overlay.draw(f, area);
-            }
-        })?;
+        // Poll in-flight channels; redraw if phase changed.
+        let changed = state.poll();
+        if changed {
+            terminal.draw(|f| {
+                draw(f, state);
+                if let Some(ref mut overlay) = help_overlay {
+                    overlay.draw(f, f.area());
+                }
+            })?;
+        }
 
-        if !event::poll(std::time::Duration::from_millis(250))? {
+        // Short timeout while busy so spinner animates; idle otherwise.
+        let wait = if state.is_busy() {
+            std::time::Duration::from_millis(80)
+        } else {
+            std::time::Duration::from_millis(250)
+        };
+
+        if !event::poll(wait)? {
+            terminal.draw(|f| {
+                let area = f.area();
+                draw(f, state);
+                if let Some(ref mut overlay) = help_overlay {
+                    overlay.draw(f, area);
+                }
+            })?;
             continue;
         }
 
@@ -467,7 +608,6 @@ where
                 }
 
                 // F1 opens the help overlay from any phase/mode.
-                // `?` is not used here so it can still be typed in form fields.
                 if k.code == KeyCode::F(1) {
                     help_overlay = Some(HelpOverlay::new("Send", state.help_lines()));
                     continue;
@@ -490,6 +630,16 @@ where
                     continue;
                 }
 
+                // While building or broadcasting: block Tab/Enter (no double-submit);
+                // allow text editing and Esc-to-Normal so user can still type.
+                if state.is_busy() {
+                    // Only allow Esc to return to Normal mode (cosmetic).
+                    if k.code == KeyCode::Esc {
+                        state.form.handle_input(Input::from(k));
+                    }
+                    continue;
+                }
+
                 if k.code == KeyCode::Esc && state.form.mode == FormMode::Normal {
                     return Ok(SendAction::Back);
                 }
@@ -500,7 +650,7 @@ where
                         Some(Field::Submit(_))
                     );
                     if focused_is_submit {
-                        state.try_submit(wallet);
+                        state.start_build(wallet);
                         continue;
                     }
                 }
@@ -520,6 +670,7 @@ pub fn draw(f: &mut ratatui::Frame, state: &mut SendState) {
     match &state.phase {
         Phase::Result(txid) => draw_result(f, area, txid.clone()),
         Phase::Error(msg) => draw_error(f, area, msg.clone(), state),
+        Phase::Building(_, _) | Phase::Broadcasting(_, _) => draw_busy(f, area, state),
         Phase::Form => draw_form_phase(f, area, state),
     }
 }
@@ -558,6 +709,37 @@ fn draw_form_phase(f: &mut ratatui::Frame, area: Rect, state: &mut SendState) {
     )))
     .alignment(Alignment::Center);
     f.render_widget(p, chunks[1]);
+}
+
+/// Render the form in the background with a spinner overlay at the bottom.
+fn draw_busy(f: &mut ratatui::Frame, area: Rect, state: &mut SendState) {
+    let (label, spinner) = match &state.phase {
+        Phase::Building(_, s) => ("building…", s),
+        Phase::Broadcasting(_, s) => ("broadcasting…", s),
+        _ => return,
+    };
+
+    let block = Block::default()
+        .title(format!(
+            " hodl • Send {} — account {} ",
+            state.chain.display_name(),
+            state.account,
+        ))
+        .borders(Borders::ALL)
+        .style(Style::default().fg(Color::Yellow));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .split(inner);
+
+    // Render the (now read-only) form behind the spinner so the user can see
+    // what they submitted.
+    draw_form(f, chunks[0], &mut state.form, &FormPalette::dark());
+
+    spinner.draw(f, chunks[1], label, Color::Cyan);
 }
 
 fn draw_result(f: &mut ratatui::Frame, area: Rect, txid: String) {
