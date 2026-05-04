@@ -5,14 +5,14 @@
 //!   1 = amount in BTC (TextFieldEditor + validator)
 //!   2 = fee tier SelectField (Slow / Normal / Fast / Custom)
 //!   3 = custom sat/vB (TextFieldEditor, only meaningful when tier = Custom)
-//!   4 = "Sign & broadcast" SubmitField
+//!   4 = RBF checkbox (BIP-125 opt-in replace-by-fee)
+//!   5 = "Sign & broadcast" SubmitField
 //!
 //! Submit pipeline:
-//!   1. Re-fetch UTXOs for the source address.
-//!   2. Map tier → block target → estimate_fee; Custom reads field 3.
-//!   3. BitcoinChain::build_tx_for_address → UnsignedTx + per-input keys.
-//!   4. BitcoinChain::sign_with_keys → SignedTx.
-//!   5. Chain::broadcast → TxId displayed in result pane.
+//!   1. Map tier → block target → estimate_fee; Custom reads field 3.
+//!   2. BitcoinChain::build_tx_multi_source → UnsignedTx + selected UTXOs + hints.
+//!   3. BitcoinChain::sign_multi_source → SignedTx.
+//!   4. Chain::broadcast → TxId displayed in result pane.
 //!
 //! After broadcast: result pane shows TxId + mempool.space hint URL.
 //! `q` / Esc returns to Accounts.
@@ -20,7 +20,8 @@
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use hjkl_form::{
-    Field, FieldMeta, Form, FormMode, Input, SelectField, SubmitField, TextFieldEditor, Validator,
+    CheckboxField, Field, FieldMeta, Form, FormMode, Input, SelectField, SubmitField,
+    TextFieldEditor, Validator,
 };
 use hjkl_ratatui::form::{FormPalette, draw_form};
 use hodl_chain_bitcoin::{BitcoinChain, NetworkParams, Purpose};
@@ -42,6 +43,7 @@ const FIELD_RECIPIENT: usize = 0;
 const FIELD_AMOUNT: usize = 1;
 const FIELD_FEE_TIER: usize = 2;
 const FIELD_CUSTOM_FEE: usize = 3;
+const FIELD_RBF: usize = 4;
 
 const FEE_TIERS: &[&str] = &[
     "Slow (12 blocks)",
@@ -110,32 +112,19 @@ enum Phase {
 }
 
 pub struct SendState {
-    source_address: Address,
-    source_account: u32,
-    source_change_branch: u32,
-    source_index: u32,
-    source_balance_sats: u64,
+    account: u32,
+    total_balance_sats: u64,
     form: Form,
     phase: Phase,
     config: Config,
 }
 
 impl SendState {
-    pub fn new(
-        source_address: Address,
-        source_account: u32,
-        source_change_branch: u32,
-        source_index: u32,
-        source_balance_sats: u64,
-        config: Config,
-    ) -> Self {
-        let form = make_send_form(source_balance_sats);
+    pub fn new(account: u32, total_balance_sats: u64, config: Config) -> Self {
+        let form = make_send_form(total_balance_sats);
         Self {
-            source_address,
-            source_account,
-            source_change_branch,
-            source_index,
-            source_balance_sats,
+            account,
+            total_balance_sats,
             form,
             phase: Phase::Form,
             config,
@@ -164,6 +153,13 @@ impl SendState {
         }
     }
 
+    fn rbf_checked(&self) -> bool {
+        match self.form.fields.get(FIELD_RBF) {
+            Some(Field::Checkbox(c)) => c.value,
+            _ => false,
+        }
+    }
+
     fn try_submit(&mut self, wallet: &UnlockedWallet) {
         let recipient_str = self.field_text(FIELD_RECIPIENT);
         if let Err(e) = validate_recipient(&recipient_str) {
@@ -181,10 +177,10 @@ impl SendState {
         };
         let amount_sats = (amount_btc * 1e8).round() as u64;
 
-        if amount_sats > self.source_balance_sats {
+        if amount_sats > self.total_balance_sats {
             self.phase = Phase::Error(format!(
                 "amount ({amount_sats} sats) exceeds balance ({} sats)",
-                self.source_balance_sats
+                self.total_balance_sats
             ));
             return;
         }
@@ -237,36 +233,20 @@ impl SendState {
             }
         };
 
+        let rbf = self.rbf_checked();
         let seed = wallet.seed().as_bytes().to_owned();
         let to_addr = Address::new(recipient_str, ChainId::Bitcoin);
         let amount = Amount::from_atoms(amount_sats as u128, ChainId::Bitcoin);
 
+        // `from` field is unused by multi-source path; a dummy address satisfies SendParams.
         let send_params = hodl_core::SendParams {
-            from: self.source_address.clone(),
+            from: Address::new(String::new(), ChainId::Bitcoin),
             to: to_addr,
             amount,
             fee: fee_rate,
         };
 
-        // Fetch UTXOs.
-        let electrum_utxo = match electrum_connect(&endpoint_url) {
-            Ok(c) => c,
-            Err(e) => {
-                self.phase = Phase::Error(format!("Electrum connect (utxo): {e}"));
-                return;
-            }
-        };
-        let chain_utxo = BitcoinChain::new(NetworkParams::BITCOIN_MAINNET, electrum_utxo)
-            .with_purpose(Purpose::Bip84);
-        let utxos = match chain_utxo.listunspent(&self.source_address) {
-            Ok(u) => u,
-            Err(e) => {
-                self.phase = Phase::Error(format!("listunspent: {e}"));
-                return;
-            }
-        };
-
-        debug!("building tx from source index {}", self.source_index);
+        // Build: coin-select across all funded addresses in the gap scan.
         let electrum_build = match electrum_connect(&endpoint_url) {
             Ok(c) => c,
             Err(e) => {
@@ -276,12 +256,14 @@ impl SendState {
         };
         let chain_build = BitcoinChain::new(NetworkParams::BITCOIN_MAINNET, electrum_build)
             .with_purpose(Purpose::Bip84);
-        let (_unsigned, keys) = match chain_build.build_tx_for_address(
+
+        debug!("building multi-source tx for account {}", self.account);
+        let (selected_utxos, hints, change_sats) = match chain_build.build_tx_multi_source(
             &seed,
-            self.source_account,
-            self.source_change_branch,
-            self.source_index,
+            self.account,
             &send_params,
+            rbf,
+            chain_cfg.gap_limit,
         ) {
             Ok(r) => r,
             Err(e) => {
@@ -300,14 +282,14 @@ impl SendState {
         };
         let chain_sign = BitcoinChain::new(NetworkParams::BITCOIN_MAINNET, electrum_sign)
             .with_purpose(Purpose::Bip84);
-        let signed = match chain_sign.sign_with_keys(
+        let signed = match chain_sign.sign_multi_source(
             &seed,
-            self.source_account,
-            self.source_change_branch,
-            self.source_index,
-            &utxos,
+            self.account,
             &send_params,
-            &keys,
+            rbf,
+            &hints,
+            &selected_utxos,
+            change_sats,
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -371,6 +353,9 @@ fn make_send_form(balance_sats: u64) -> Form {
             FEE_TIERS.iter().map(|s| s.to_string()).collect(),
         )))
         .with_field(Field::SingleLineText(custom_fee_field))
+        .with_field(Field::Checkbox(CheckboxField::new(FieldMeta::new(
+            "RBF (replace-by-fee)",
+        ))))
         .with_field(Field::Submit(SubmitField::new(FieldMeta::new(
             "Sign & broadcast",
         ))))
@@ -455,8 +440,8 @@ pub fn draw(f: &mut ratatui::Frame, state: &mut SendState) {
 fn draw_form_phase(f: &mut ratatui::Frame, area: Rect, state: &mut SendState) {
     let block = Block::default()
         .title(format!(
-            " hodl • Send — from {} ",
-            state.source_address.as_str()
+            " hodl • Send — account {} (total {} sats) ",
+            state.account, state.total_balance_sats,
         ))
         .borders(Borders::ALL)
         .style(Style::default().fg(Color::Yellow));

@@ -8,6 +8,23 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Multi-source UTXO**: Bitcoin send now aggregates UTXOs across every funded
+  address in the gap-scan, coin-selecting across the merged pool. Closes the
+  v0.2.0 deferred item where wallets with funds spread over multiple derived
+  addresses hit "insufficient funds" with enough total balance. New API:
+  `BitcoinChain::build_tx_multi_source` + `sign_multi_source` with `InputHint`
+  per input.
+- **RBF (BIP-125)**: opt-in checkbox on the send screen. When enabled, every
+  input's sequence is `0xfffffffd` (RBF-signaling); otherwise `0xffffffff`
+  (final). Default is off — explicit user choice.
+
+### Changed
+
+- Send TUI passes `(account, total_balance)` to the chain instead of a single
+  `(address, index)` pair. Account screen rebinds Send accordingly.
+
 ## [0.3.0] - 2026-05-04
 
 Chain enum reshape + curated default Electrum endpoints. Two breaking changes

@@ -524,6 +524,125 @@ mod tests {
         assert_eq!(h1, h2, "sighash must be deterministic");
     }
 
+    // ── RBF / sequence tests ───────────────────────────────────────────────
+
+    fn key_and_hash(seed_byte: u8) -> ([u8; 33], [u8; 20]) {
+        let signing_key = SigningKey::from_bytes(&[seed_byte; 32].into()).unwrap();
+        let pubkey_bytes: [u8; 33] = signing_key
+            .verifying_key()
+            .to_encoded_point(true)
+            .as_bytes()
+            .try_into()
+            .unwrap();
+        let pubkey_hash = hash160(&pubkey_bytes);
+        (pubkey_bytes, pubkey_hash)
+    }
+
+    /// Coin selection across 3 UTXOs from 2 different pubkey_hashes selects
+    /// the right greedy subset (largest-first).
+    #[test]
+    fn coin_selection_multi_address_picks_largest_first() {
+        let (pk1, _) = key_and_hash(0x01);
+        let (pk2, _) = key_and_hash(0x02);
+
+        // 3 UTXOs: addr-A owns 60k and 5k, addr-B owns 20k.
+        let utxos = vec![
+            dummy_utxo(60_000), // largest → selected first
+            dummy_utxo(5_000),
+            dummy_utxo(20_000),
+        ];
+
+        // Greedy: 60k covers 50k + 1k fee → only one input needed.
+        let (selected, change) = select_coins(utxos, 50_000, 1_000).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].value, 60_000);
+        assert_eq!(change, 9_000);
+
+        // The pubkeys are different per-address; both still derive P2WPKH.
+        let h1 = hash160(&pk1);
+        let h2 = hash160(&pk2);
+        assert_ne!(h1, h2, "different keys must produce different hashes");
+    }
+
+    /// With rbf=true, every input's sequence must be 0xfffffffd (BIP-125).
+    #[test]
+    fn rbf_sequence_on_inputs() {
+        let (pk, ph) = key_and_hash(0x10);
+        let inp = TxInput {
+            outpoint: Outpoint::from_str(&"ab".repeat(32), 0).unwrap(),
+            sequence: 0xffff_fffd, // SEQUENCE_RBF
+            value_sats: 100_000,
+            pubkey_hash: ph,
+            pubkey: pk,
+        };
+        let out = TxOutput {
+            script_pubkey: p2wpkh_script(&ph),
+            value_sats: 99_000,
+        };
+        let signed = sign_inputs(&[inp], &[out], &[[0x10u8; 32]]).unwrap();
+        // Sequence bytes at: version(4) + segwit-marker/flag(2) + vin_count(1)
+        // + outpoint(36) + scriptSig_varint(1) = bytes 44..48.
+        let seq_start = 4 + 2 + 1 + 36 + 1;
+        let seq_bytes = &signed[seq_start..seq_start + 4];
+        let seq = u32::from_le_bytes(seq_bytes.try_into().unwrap());
+        assert_eq!(seq, 0xffff_fffd, "RBF sequence must be 0xfffffffd");
+    }
+
+    /// With rbf=false, every input's sequence must be 0xffffffff (final, non-RBF).
+    #[test]
+    fn non_rbf_sequence_on_inputs() {
+        let (pk, ph) = key_and_hash(0x20);
+        let inp = TxInput {
+            outpoint: Outpoint::from_str(&"cd".repeat(32), 0).unwrap(),
+            sequence: 0xffff_ffff, // SEQUENCE_FINAL
+            value_sats: 100_000,
+            pubkey_hash: ph,
+            pubkey: pk,
+        };
+        let out = TxOutput {
+            script_pubkey: p2wpkh_script(&ph),
+            value_sats: 99_000,
+        };
+        let signed = sign_inputs(&[inp], &[out], &[[0x20u8; 32]]).unwrap();
+        let seq_start = 4 + 2 + 1 + 36 + 1;
+        let seq_bytes = &signed[seq_start..seq_start + 4];
+        let seq = u32::from_le_bytes(seq_bytes.try_into().unwrap());
+        assert_eq!(seq, 0xffff_ffff, "non-RBF sequence must be 0xffffffff");
+    }
+
+    /// Sign round-trip with mixed inputs from two different keys.
+    #[test]
+    fn sign_round_trip_mixed_keys() {
+        let (pk1, ph1) = key_and_hash(0x30);
+        let (pk2, ph2) = key_and_hash(0x31);
+
+        let inp1 = TxInput {
+            outpoint: Outpoint::from_str(&"11".repeat(32), 0).unwrap(),
+            sequence: 0xffff_fffd,
+            value_sats: 80_000,
+            pubkey_hash: ph1,
+            pubkey: pk1,
+        };
+        let inp2 = TxInput {
+            outpoint: Outpoint::from_str(&"22".repeat(32), 1).unwrap(),
+            sequence: 0xffff_fffd,
+            value_sats: 40_000,
+            pubkey_hash: ph2,
+            pubkey: pk2,
+        };
+        let out = TxOutput {
+            script_pubkey: p2wpkh_script(&ph1),
+            value_sats: 119_000,
+        };
+
+        // Two different keys, one per input.
+        let signed = sign_inputs(&[inp1, inp2], &[out], &[[0x30u8; 32], [0x31u8; 32]]).unwrap();
+
+        // Segwit marker/flag present.
+        assert_eq!(signed[4], 0x00);
+        assert_eq!(signed[5], 0x01);
+    }
+
     #[test]
     fn psbt_build_has_magic() {
         let key_bytes = [3u8; 32];

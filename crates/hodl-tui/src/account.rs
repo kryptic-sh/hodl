@@ -28,13 +28,13 @@ use hodl_wallet::UnlockedWallet;
 pub enum AccountAction {
     /// Navigate to the receive screen for the given address.
     OpenReceive(Address),
-    /// Navigate to the send screen for the given address + derivation index.
+    /// Navigate to the send screen for the given HD account.
+    ///
+    /// Multi-source send aggregates UTXOs across all funded addresses in the
+    /// gap scan; address-level granularity is no longer needed here.
     OpenSend {
-        address: Address,
         account: u32,
-        change_branch: u32,
-        index: u32,
-        balance_sats: u64,
+        total_balance_sats: u64,
     },
     /// Navigate to the address book screen.
     OpenAddressBook,
@@ -215,18 +215,18 @@ impl AccountState {
                 }
             }
             KeyCode::Char('s') => {
-                if let Some(idx) = self.table_state.selected()
-                    && let Some(row) = self.rows.get(idx)
-                {
-                    let balance_sats = row.balance.as_ref().map(|b| b.atoms() as u64).unwrap_or(0);
-                    return Some(AccountAction::OpenSend {
-                        address: row.address.clone(),
-                        account: 0,
-                        change_branch: 0,
-                        index: row.index,
-                        balance_sats,
-                    });
-                }
+                // Sum balance across all rows — multi-source send draws from
+                // every funded address so total is what the user can actually spend.
+                let total_balance_sats = self
+                    .rows
+                    .iter()
+                    .filter_map(|r| r.balance.as_ref())
+                    .map(|b| b.atoms() as u64)
+                    .sum();
+                return Some(AccountAction::OpenSend {
+                    account: 0,
+                    total_balance_sats,
+                });
             }
             KeyCode::Char('b') => return Some(AccountAction::OpenAddressBook),
             KeyCode::Char('S') => return Some(AccountAction::OpenSettings),

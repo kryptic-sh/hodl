@@ -228,20 +228,11 @@ impl App {
                             self.screen = Screen::Receive(ReceiveState::new(addr, path));
                         }
                         Some(AccountAction::OpenSend {
-                            address,
                             account,
-                            change_branch,
-                            index,
-                            balance_sats,
+                            total_balance_sats,
                         }) => {
-                            let send_state = SendState::new(
-                                address,
-                                account,
-                                change_branch,
-                                index,
-                                balance_sats,
-                                self.config.clone(),
-                            );
+                            let send_state =
+                                SendState::new(account, total_balance_sats, self.config.clone());
                             self.screen = Screen::Send(Box::new(send_state));
                         }
                         Some(AccountAction::OpenSettings) => {

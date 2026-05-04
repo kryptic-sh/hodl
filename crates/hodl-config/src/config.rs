@@ -400,6 +400,33 @@ tls = true
     }
 
     #[test]
+    fn explicit_empty_endpoints_overrides_defaults() {
+        // User writing `[chains.bitcoin] endpoints = []` is an explicit
+        // "no servers for this chain" signal — the merge must NOT fall
+        // back to the defaults for that chain.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[chains.bitcoin]
+endpoints = []
+"#,
+        )
+        .unwrap();
+        let cfg = Config::load(&path).expect("load");
+        let btc = cfg.chains.get(&ChainId::Bitcoin).expect("btc present");
+        assert!(
+            btc.endpoints.is_empty(),
+            "explicit empty list must defeat defaults; got {:?}",
+            btc.endpoints
+        );
+        // Other BTC-family chains keep their defaults via per-key merge.
+        let doge = cfg.chains.get(&ChainId::Dogecoin).expect("doge default");
+        assert!(!doge.endpoints.is_empty(), "DOGE default lost");
+    }
+
+    #[test]
     fn missing_file_returns_default() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("config.toml");
