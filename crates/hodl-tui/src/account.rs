@@ -7,26 +7,31 @@
 //!
 //! `start_load` spawns a background thread that opens the Electrum/RPC
 //! connection, runs a BIP-44 gap-limit scan (Bitcoin family) or derives a
-//! single address with its balance (EVM / Monero), and returns
-//! `Result<WalletScan, String>` via a channel. The event loop polls via
-//! `pending_scan.try_recv()` each iteration:
-//! - `Empty`          → tick `scanning_spinner`; redraw.
-//! - `Ok(Ok(scan))`   → swap into state; clear pending.
-//! - `Ok(Err(msg))`   → set scan_error; clear pending.
-//! - `Disconnected`   → set scan_error to "scan thread panicked"; clear pending.
+//! single address with its balance (EVM / Monero), and sends `ScanEvent`
+//! messages over a channel. The event loop polls via `poll_scan()` each
+//! iteration:
+//! - `ScanEvent::Used(used)` → append to `partial_scan`; redraw immediately.
+//! - `ScanEvent::Done(scan)` → swap `partial_scan` into `scan`; clear pending.
+//! - `ScanEvent::Error(msg)` → set scan_error; clear pending.
+//! - `TryRecvError::Empty`   → tick `scanning_spinner`; no redraw.
+//! - `TryRecvError::Disconnected` → set scan_error to "scan thread panicked".
 //!
 //! While scanning, navigation keys that depend on scan results (`r`/`s`/`b`/`d`)
 //! are suppressed. `q`, `S`, `p`, Ctrl-C/D, and `?` always work.
+//!
+//! The summary card shows partial results (live count + running balance) while
+//! scanning, with the spinner ticking next to the numbers. The Addresses
+//! sub-view (`d`) is still gated on a completed scan snapshot.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread::JoinHandle;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_picker::{PickerAction, PickerEvent, PickerLogic};
-use hodl_chain_bitcoin::WalletScan;
+use hodl_chain_bitcoin::{UsedAddress, WalletScan};
 use hodl_config::Config;
 use hodl_core::{Address, Chain, ChainId};
 use ratatui::Frame;
@@ -41,6 +46,16 @@ use hodl_wallet::UnlockedWallet;
 
 use crate::active_chain::ActiveChain;
 use crate::spinner::Spinner;
+
+/// Events sent from the scan worker thread to the UI.
+enum ScanEvent {
+    /// New used address discovered. Append to partial_scan and bump running total.
+    Used(UsedAddress),
+    /// Scan finished. Final WalletScan replaces the partial accumulator.
+    Done(WalletScan),
+    /// Scan errored. Surface via scan_error; clear pending.
+    Error(String),
+}
 
 /// Action emitted by the account screen to the parent app loop.
 #[derive(Debug)]
@@ -78,8 +93,11 @@ pub struct AccountState {
     pub scan: Option<WalletScan>,
     /// Populated when the scan thread returns an error.
     pub scan_error: Option<String>,
-    /// In-flight scan channel. `Some` while the background thread is running.
-    pending_scan: Option<Receiver<Result<WalletScan, String>>>,
+    /// In-flight scan event channel. `Some` while the background thread is running.
+    pending_scan: Option<Receiver<ScanEvent>>,
+    /// Partial result accumulated from `ScanEvent::Used` events while
+    /// `pending_scan` is `Some`. Promoted to `self.scan` on `ScanEvent::Done`.
+    partial_scan: WalletScan,
     /// Spinner shown while `pending_scan` is active.
     scanning_spinner: Option<Spinner>,
     /// Chain picker overlay. `None` when closed.
@@ -99,6 +117,7 @@ impl AccountState {
             scan: None,
             scan_error: None,
             pending_scan: None,
+            partial_scan: WalletScan::default(),
             scanning_spinner: None,
             picker: None,
             picker_chains: Vec::new(),
@@ -120,52 +139,72 @@ impl AccountState {
         }
     }
 
-    /// Poll the pending scan channel once. Returns `true` if state changed
-    /// (caller should redraw), `false` if still empty.
+    /// Poll the pending scan channel, draining all queued events in one pass.
+    ///
+    /// Returns `true` if state changed (caller should redraw), `false` if the
+    /// channel was empty and only the spinner was ticked.
     pub fn poll_scan(&mut self) -> bool {
-        let result = match &self.pending_scan {
-            Some(rx) => rx.try_recv(),
+        let rx = match &self.pending_scan {
+            Some(rx) => rx,
             None => return false,
         };
-
-        use std::sync::mpsc::TryRecvError;
-        match result {
-            Ok(Ok(scan)) => {
-                self.scan = Some(scan);
-                self.scan_error = None;
-                self.pending_scan = None;
-                self.scanning_spinner = None;
-                true
-            }
-            Ok(Err(msg)) => {
-                self.scan_error = Some(msg);
-                self.scan = None;
-                self.pending_scan = None;
-                self.scanning_spinner = None;
-                true
-            }
-            Err(TryRecvError::Disconnected) => {
-                self.scan_error = Some("scan thread panicked".into());
-                self.scan = None;
-                self.pending_scan = None;
-                self.scanning_spinner = None;
-                true
-            }
-            Err(TryRecvError::Empty) => {
-                self.tick_spinner();
-                false
+        let mut changed = false;
+        loop {
+            match rx.try_recv() {
+                Ok(ScanEvent::Used(used)) => {
+                    self.partial_scan.total.confirmed += used.balance.confirmed;
+                    self.partial_scan.total.pending += used.balance.pending;
+                    self.partial_scan.used.push(used);
+                    changed = true;
+                }
+                Ok(ScanEvent::Done(final_scan)) => {
+                    self.scan = Some(final_scan);
+                    self.scan_error = None;
+                    self.partial_scan = WalletScan::default();
+                    self.pending_scan = None;
+                    self.scanning_spinner = None;
+                    return true;
+                }
+                Ok(ScanEvent::Error(msg)) => {
+                    self.scan_error = Some(msg);
+                    self.scan = None;
+                    self.partial_scan = WalletScan::default();
+                    self.pending_scan = None;
+                    self.scanning_spinner = None;
+                    return true;
+                }
+                Err(TryRecvError::Empty) => {
+                    if !changed {
+                        self.tick_spinner();
+                    }
+                    return changed;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.scan_error = Some("scan thread panicked".into());
+                    self.scan = None;
+                    self.partial_scan = WalletScan::default();
+                    self.pending_scan = None;
+                    self.scanning_spinner = None;
+                    return true;
+                }
             }
         }
     }
 
     /// Spawn a background thread to run the gap-limit scan.
-    /// Replaces the old per-row balance loader.
+    ///
+    /// For Bitcoin-family chains the worker calls
+    /// `scan_used_addresses_streaming` and sends a `ScanEvent::Used` for every
+    /// discovered address before a final `ScanEvent::Done`. For EVM/Monero the
+    /// degenerate single-address case sends one `Used` followed by `Done` so
+    /// the consumer's event loop is uniform across all chain types.
     pub fn start_load(&mut self, wallet: &UnlockedWallet) {
         debug!("start_load (scan) for chain {:?}", self.current_chain);
 
         // Clear stale data so the loading state is visible immediately.
         self.scan = None;
         self.scan_error = None;
+        self.partial_scan = WalletScan::default();
         self.flash = None;
 
         let chain = self.current_chain;
@@ -179,11 +218,10 @@ impl AccountState {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             // Mutable rebinding so we can zeroize the actual captured array
-            // (not a fresh Copy) after the worker returns.
+            // (not a fresh Copy) after the worker returns on every exit path.
             let mut seed = seed;
-            let result = scan_thread(chain, &config, &seed, gap_limit, 0);
+            scan_thread_streaming(chain, &config, &seed, gap_limit, 0, &tx);
             seed.zeroize();
-            let _ = tx.send(result);
         });
 
         self.pending_scan = Some(rx);
@@ -321,90 +359,138 @@ impl AccountState {
     }
 }
 
-/// Worker function executed on the background thread.
+/// Streaming worker function executed on the background thread.
 ///
-/// For Bitcoin-family chains: runs `BitcoinChain::scan_used_addresses`.
+/// For Bitcoin-family chains: calls `scan_used_addresses_streaming`, sending a
+/// `ScanEvent::Used` for each discovered address as it is found, then
+/// `ScanEvent::Done` with the final `WalletScan` once the walk completes.
+///
 /// For Ethereum / BSC / Monero: builds a degenerate single-entry scan from
-/// a single derived address + balance query (these chains use a fixed derived
-/// address, not a gap-walk).
+/// a single derived address + balance query, sends one `ScanEvent::Used`
+/// followed by `ScanEvent::Done` to keep the consumer uniform.
+///
+/// On any error, sends `ScanEvent::Error(msg)` and returns.
 ///
 /// # Seed handling
 ///
 /// The caller must zeroize `seed` after this function returns — the caller's
 /// thread owns the `[u8; 64]` and is responsible for the zeroize call on
-/// every exit path (including panic unwind via a Drop guard in the closure).
-fn scan_thread(
+/// every exit path. The callback closure receives only `&UsedAddress` (no
+/// seed material).
+fn scan_thread_streaming(
     chain: ChainId,
     config: &Config,
     seed: &[u8; 64],
     gap_limit: u32,
     account: u32,
-) -> Result<WalletScan, String> {
-    debug!("scan_thread for chain {:?}", chain);
+    tx: &std::sync::mpsc::Sender<ScanEvent>,
+) {
+    debug!("scan_thread_streaming for chain {:?}", chain);
 
-    let active = ActiveChain::from_chain_id(chain, config)
-        .map_err(|e| format!("{}: {e}", chain.display_name()))?;
+    let active = match ActiveChain::from_chain_id(chain, config) {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = tx.send(ScanEvent::Error(format!("{}: {e}", chain.display_name())));
+            return;
+        }
+    };
 
     match active {
         ActiveChain::Bitcoin(btc_chain) => {
-            // Full gap-limit scan via scan_used_addresses.
-            btc_chain
-                .scan_used_addresses(seed, account, gap_limit)
-                .map_err(|e| format!("{}: {e}", chain.display_name()))
+            let tx_clone = tx.clone();
+            let mut on_used = |used: &UsedAddress| {
+                let _ = tx_clone.send(ScanEvent::Used(used.clone()));
+            };
+            match btc_chain.scan_used_addresses_streaming(seed, account, gap_limit, &mut on_used) {
+                Ok(scan) => {
+                    let _ = tx.send(ScanEvent::Done(scan));
+                }
+                Err(e) => {
+                    let _ = tx.send(ScanEvent::Error(format!("{}: {e}", chain.display_name())));
+                }
+            }
         }
         ActiveChain::Ethereum(eth_chain) => {
-            // TODO: per-chain scan strategies for non-BTC families.
             // EVM uses a single derived address — build a degenerate 1-entry scan.
-            let addr_str = eth_chain
-                .derive(seed, account, 0)
-                .map_err(|e| format!("{}: derive: {e}", chain.display_name()))?;
-            let balance_amount = eth_chain
-                .balance(&addr_str)
-                .map_err(|e| format!("{}: balance: {e}", chain.display_name()))?;
+            let addr_str = match eth_chain.derive(seed, account, 0) {
+                Ok(a) => a,
+                Err(e) => {
+                    let _ = tx.send(ScanEvent::Error(format!(
+                        "{}: derive: {e}",
+                        chain.display_name()
+                    )));
+                    return;
+                }
+            };
+            let balance_amount = match eth_chain.balance(&addr_str) {
+                Ok(b) => b,
+                Err(e) => {
+                    let _ = tx.send(ScanEvent::Error(format!(
+                        "{}: balance: {e}",
+                        chain.display_name()
+                    )));
+                    return;
+                }
+            };
             let balance_atoms = balance_amount.atoms() as u64;
             let balance_split = hodl_chain_bitcoin::BalanceSplit {
                 confirmed: balance_atoms,
                 pending: 0,
             };
-            let used = vec![hodl_chain_bitcoin::UsedAddress {
+            let used = UsedAddress {
                 index: 0,
                 change: 0,
                 address: addr_str.as_str().to_string(),
                 balance: balance_split,
-            }];
-            Ok(WalletScan {
+            };
+            let _ = tx.send(ScanEvent::Used(used.clone()));
+            let _ = tx.send(ScanEvent::Done(WalletScan {
                 total: balance_split,
-                used,
+                used: vec![used],
                 highest_index_receive: 0,
                 highest_index_change: 0,
-            })
+            }));
         }
         ActiveChain::Monero(xmr_chain) => {
-            // TODO: per-chain scan strategies for non-BTC families.
             // Monero uses a single derived address — build a degenerate 1-entry scan.
-            let addr_str = xmr_chain
-                .derive(seed, account, 0)
-                .map_err(|e| format!("{}: derive: {e}", chain.display_name()))?;
-            let balance_amount = xmr_chain
-                .balance(&addr_str)
-                .map_err(|e| format!("{}: balance: {e}", chain.display_name()))?;
+            let addr_str = match xmr_chain.derive(seed, account, 0) {
+                Ok(a) => a,
+                Err(e) => {
+                    let _ = tx.send(ScanEvent::Error(format!(
+                        "{}: derive: {e}",
+                        chain.display_name()
+                    )));
+                    return;
+                }
+            };
+            let balance_amount = match xmr_chain.balance(&addr_str) {
+                Ok(b) => b,
+                Err(e) => {
+                    let _ = tx.send(ScanEvent::Error(format!(
+                        "{}: balance: {e}",
+                        chain.display_name()
+                    )));
+                    return;
+                }
+            };
             let balance_atoms = balance_amount.atoms() as u64;
             let balance_split = hodl_chain_bitcoin::BalanceSplit {
                 confirmed: balance_atoms,
                 pending: 0,
             };
-            let used = vec![hodl_chain_bitcoin::UsedAddress {
+            let used = UsedAddress {
                 index: 0,
                 change: 0,
                 address: addr_str.as_str().to_string(),
                 balance: balance_split,
-            }];
-            Ok(WalletScan {
+            };
+            let _ = tx.send(ScanEvent::Used(used.clone()));
+            let _ = tx.send(ScanEvent::Done(WalletScan {
                 total: balance_split,
-                used,
+                used: vec![used],
                 highest_index_receive: 0,
                 highest_index_change: 0,
-            })
+            }));
         }
     }
 }
@@ -475,79 +561,122 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
     let card_inner = card_block.inner(card_area);
     f.render_widget(card_block, card_area);
 
+    let gap_limit = state
+        .config
+        .chains
+        .get(&state.current_chain)
+        .map(|c| c.gap_limit)
+        .unwrap_or(20);
+
     // Build card body lines.
-    let body_lines: Vec<Line> = if state.is_scanning() {
-        // Show spinner while scan is running.
-        let frame = state
-            .scanning_spinner
-            .as_ref()
-            .map(|s| s.current())
-            .unwrap_or("⠋");
-        vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                format!("  scanning…  {frame}"),
-                Style::default().fg(Color::Cyan),
-            )),
-            Line::from(""),
-        ]
-    } else if let Some(ref err) = state.scan_error.clone() {
-        vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                format!("  error: {err}"),
-                Style::default().fg(Color::Red),
-            )),
-            Line::from(""),
-        ]
-    } else if let Some(ref scan) = state.scan {
-        let confirmed = format_sats(scan.total.confirmed, state.current_chain);
-        let pending = format_sats(scan.total.pending, state.current_chain);
-        let total = format_sats(scan.total.total(), state.current_chain);
-        let used_count = scan.used.len();
-        vec![
-            Line::from(""),
-            Line::from(format!("   confirmed:    {confirmed}")),
-            Line::from(format!("   pending:      {pending}")),
-            Line::from(format!("   total:        {total}")),
-            Line::from(""),
-            Line::from(format!("   used addresses:  {used_count}")),
-            Line::from(format!("   gap limit:       {}", {
-                state
-                    .config
-                    .chains
-                    .get(&state.current_chain)
-                    .map(|c| c.gap_limit)
-                    .unwrap_or(20)
-            })),
-            Line::from(""),
-            Line::from(Span::styled(
-                "   r receive · s send · b book · S settings",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(Span::styled(
-                "   p picker · d addresses · q lock · ? help",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ]
-    } else {
-        // No scan yet, no error — initial blank state (shouldn't normally show).
-        vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                "  press any key to start",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(""),
-        ]
-    };
+    let body_lines: Vec<Line> =
+        if !state.is_scanning() && state.scan.is_none() && state.scan_error.is_none() {
+            // Initial state pre-scan — render placeholder.
+            vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  press any key to start",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+            ]
+        } else if !state.is_scanning() {
+            if let Some(ref err) = state.scan_error.clone() {
+                // Scan failed — render error in the card body.
+                vec![
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        format!("  error: {err}"),
+                        Style::default().fg(Color::Red),
+                    )),
+                    Line::from(""),
+                ]
+            } else if let Some(ref scan) = state.scan {
+                // Scan complete — render full card.
+                let confirmed = format_sats(scan.total.confirmed, state.current_chain);
+                let pending = format_sats(scan.total.pending, state.current_chain);
+                let total = format_sats(scan.total.total(), state.current_chain);
+                let used_count = scan.used.len();
+                vec![
+                    Line::from(""),
+                    Line::from(format!("   confirmed:    {confirmed}")),
+                    Line::from(format!("   pending:      {pending}")),
+                    Line::from(format!("   total:        {total}")),
+                    Line::from(""),
+                    Line::from(format!("   used addresses:  {used_count}")),
+                    Line::from(format!("   gap limit:       {gap_limit}")),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "   r receive · s send · b book · S settings",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                    Line::from(Span::styled(
+                        "   p picker · d addresses · q lock · ? help",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ]
+            } else {
+                vec![]
+            }
+        } else {
+            // is_scanning() — render PARTIAL state from self.partial_scan with
+            // spinner ticking next to the numbers.
+            let frame = state
+                .scanning_spinner
+                .as_ref()
+                .map(|s| s.current())
+                .unwrap_or("⠋");
+            let confirmed = format_sats(state.partial_scan.total.confirmed, state.current_chain);
+            let pending = format_sats(state.partial_scan.total.pending, state.current_chain);
+            let total = format_sats(state.partial_scan.total.total(), state.current_chain);
+            let used_count = state.partial_scan.used.len();
+            vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::raw(format!("   confirmed:    {confirmed}  ")),
+                    Span::styled(frame, Style::default().fg(Color::Cyan)),
+                ]),
+                Line::from(vec![
+                    Span::raw(format!("   pending:      {pending}  ")),
+                    Span::styled(frame, Style::default().fg(Color::Cyan)),
+                ]),
+                Line::from(vec![
+                    Span::raw(format!("   total:        {total}  ")),
+                    Span::styled(frame, Style::default().fg(Color::Cyan)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::raw(format!("   used addresses:  {used_count}  ")),
+                    Span::styled(frame, Style::default().fg(Color::Cyan)),
+                ]),
+                Line::from(format!("   gap limit:       {gap_limit}")),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "   r receive · s send · b book · S settings",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(Span::styled(
+                    "   p picker · d addresses · q lock · ? help",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        };
 
     let body_para = Paragraph::new(body_lines);
     f.render_widget(body_para, card_inner);
 
     // Status line.
     let (status_text, status_color) = if state.is_scanning() {
-        (format!("{} · scanning…", chain_name), Color::Cyan)
+        let frame = state
+            .scanning_spinner
+            .as_ref()
+            .map(|s| s.current())
+            .unwrap_or("⠋");
+        let n = state.partial_scan.used.len();
+        (
+            format!("{chain_name} · scanning {n} used so far  {frame}"),
+            Color::Cyan,
+        )
     } else if let Some(ref err) = state.scan_error {
         (format!("{chain_name} · scan failed: {err}"), Color::Red)
     } else if let Some(ref scan) = state.scan {

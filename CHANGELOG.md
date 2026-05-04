@@ -8,6 +8,22 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **Streaming wallet scan with live summary updates.** The Accounts summary card
+  now updates incrementally as each used address is discovered, instead of
+  showing only a spinner for the full scan duration.
+  `BitcoinChain::scan_used_addresses_streaming` adds a
+  `&mut dyn FnMut(&UsedAddress)` callback fired on every used address before
+  continuing the gap walk; `scan_used_addresses` becomes a thin no-op wrapper.
+  The TUI background worker sends `ScanEvent::Used` per discovery and
+  `ScanEvent::Done` on completion; `AccountState` accumulates a `partial_scan`
+  from `Used` events so the card shows live confirmed/pending/total balances and
+  running used-address count (with the spinner frame inline) throughout the
+  scan. The status line reads `<chain> · scanning N used so far ⠋` during the
+  walk. The Addresses sub-view (`d`) remains gated on scan completion — it opens
+  a post-scan snapshot, not the partial accumulator.
+
 ### Added
 
 - **Addresses sub-view (`d` from Accounts screen).** Pressing `d` on the
