@@ -7,11 +7,12 @@ use hodl_core::{
 };
 
 use crate::derive::{Purpose, derive_address, derive_xprv};
-use crate::electrum::{ElectrumClient, Utxo, p2pkh_scripthash, p2wpkh_scripthash};
+use crate::electrum::{ElectrumClient, Utxo, p2pkh_scripthash, p2sh_scripthash, p2wpkh_scripthash};
 use crate::network::NetworkParams;
 use crate::psbt::{
     Outpoint, TxInput, TxOutput, build_psbt, decode_p2wpkh_address, estimate_vsize, hash160,
-    p2pkh_script, p2wpkh_script, select_coins, sign_inputs, sign_inputs_legacy_p2pkh,
+    p2pkh_script, p2sh_p2wpkh_redeem_script, p2sh_script, p2wpkh_script, select_coins, sign_inputs,
+    sign_inputs_legacy_p2pkh, sign_inputs_p2sh_p2wpkh,
 };
 
 /// Decode a recipient address string to a scriptPubKey for the given purpose.
@@ -70,9 +71,27 @@ fn decode_address_to_script(
             h160.copy_from_slice(&decoded[1..]);
             Ok(p2pkh_script(&h160))
         }
-        Purpose::Bip49 => Err(Error::Chain(
-            "BIP-49 wrapped segwit send not yet implemented".into(),
-        )),
+        Purpose::Bip49 => {
+            // P2SH-P2WPKH recipient address: base58check with p2sh_prefix.
+            let decoded = bs58::decode(addr)
+                .with_check(None)
+                .into_vec()
+                .map_err(|e| Error::Codec(format!("base58 decode: {e}")))?;
+            if decoded.len() != 21 {
+                return Err(Error::Codec("P2SH address must decode to 21 bytes".into()));
+            }
+            if decoded[0] != params.p2sh_prefix {
+                return Err(Error::Codec(format!(
+                    "address version byte 0x{:02x} does not match {} P2SH (expected 0x{:02x})",
+                    decoded[0],
+                    params.chain_id.display_name(),
+                    params.p2sh_prefix
+                )));
+            }
+            let mut script_hash = [0u8; 20];
+            script_hash.copy_from_slice(&decoded[1..]);
+            Ok(p2sh_script(&script_hash))
+        }
     }
 }
 
@@ -81,7 +100,12 @@ fn purpose_script(purpose: Purpose, pubkey_hash: &[u8; 20]) -> Vec<u8> {
     match purpose {
         Purpose::Bip84 | Purpose::Bip86 => p2wpkh_script(pubkey_hash),
         Purpose::Bip44 => p2pkh_script(pubkey_hash),
-        Purpose::Bip49 => p2wpkh_script(pubkey_hash), // fallback; gated above
+        Purpose::Bip49 => {
+            // Change output for P2SH-P2WPKH: hash the redeemScript.
+            let redeem = p2sh_p2wpkh_redeem_script(pubkey_hash);
+            let script_hash = hash160(&redeem);
+            p2sh_script(&script_hash)
+        }
     }
 }
 
@@ -164,11 +188,17 @@ impl BitcoinChain {
             return Ok(p2pkh_scripthash(&h160));
         }
 
-        // Try legacy P2PKH base58check (BTC/LTC/DOGE/NAV "D"/"L"/"N"/"1" addresses).
+        // Try legacy base58check — may be P2PKH or P2SH.
+        // Distinguish by the version byte against the chain's prefixes.
         if let Ok(decoded) = bs58::decode(s).with_check(None).into_vec()
             && decoded.len() == 21
         {
+            let version = decoded[0];
             let h160: [u8; 20] = decoded[1..].try_into().unwrap();
+            if version == self.params.p2sh_prefix {
+                return Ok(p2sh_scripthash(&h160));
+            }
+            // Default: treat as P2PKH (covers p2pkh_prefix and unknown).
             return Ok(p2pkh_scripthash(&h160));
         }
 
@@ -467,15 +497,15 @@ impl BitcoinChain {
             });
         }
 
-        let signed_bytes = if matches!(self.purpose, Purpose::Bip44) {
-            sign_inputs_legacy_p2pkh(
+        let signed_bytes = match self.purpose {
+            Purpose::Bip44 => sign_inputs_legacy_p2pkh(
                 self.params.chain_id,
                 &tx_inputs,
                 &tx_outputs,
                 &key_bytes_vec,
-            )?
-        } else {
-            sign_inputs(&tx_inputs, &tx_outputs, &key_bytes_vec)?
+            )?,
+            Purpose::Bip49 => sign_inputs_p2sh_p2wpkh(&tx_inputs, &tx_outputs, &key_bytes_vec)?,
+            _ => sign_inputs(&tx_inputs, &tx_outputs, &key_bytes_vec)?,
         };
         Ok(SignedTx {
             chain: self.params.chain_id,
@@ -847,11 +877,8 @@ mod chain_tests {
     #[test]
     fn decode_address_rejects_wrong_chain_prefix() {
         let btc_addr = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
-        let result = decode_address_to_script(
-            btc_addr,
-            Purpose::Bip44,
-            &NetworkParams::DOGECOIN_MAINNET,
-        );
+        let result =
+            decode_address_to_script(btc_addr, Purpose::Bip44, &NetworkParams::DOGECOIN_MAINNET);
         assert!(
             result.is_err(),
             "BTC address must be rejected on DOGE chain"
@@ -867,11 +894,8 @@ mod chain_tests {
     #[test]
     fn decode_address_accepts_matching_chain_prefix() {
         let doge_addr = "DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L";
-        let result = decode_address_to_script(
-            doge_addr,
-            Purpose::Bip44,
-            &NetworkParams::DOGECOIN_MAINNET,
-        );
+        let result =
+            decode_address_to_script(doge_addr, Purpose::Bip44, &NetworkParams::DOGECOIN_MAINNET);
         assert!(
             result.is_ok(),
             "DOGE address must be accepted on DOGE chain; got: {:?}",

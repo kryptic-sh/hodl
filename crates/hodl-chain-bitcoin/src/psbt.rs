@@ -74,6 +74,26 @@ pub fn p2wpkh_script(pubkey_hash: &[u8; 20]) -> Vec<u8> {
     s
 }
 
+/// Build a P2SH-P2WPKH redeemScript (22 bytes): OP_0 <20-byte pubkey hash>.
+///
+/// This is the same bytes as a P2WPKH scriptPubKey — when wrapped in P2SH the
+/// script-hash of this 22-byte script is what goes in the P2SH scriptPubKey.
+pub fn p2sh_p2wpkh_redeem_script(pubkey_hash: &[u8; 20]) -> Vec<u8> {
+    // redeemScript = OP_0 <20-byte pubkey-hash> (same shape as P2WPKH spk)
+    p2wpkh_script(pubkey_hash)
+}
+
+/// Build a P2SH scriptPubKey (23 bytes):
+/// OP_HASH160 <20-byte script-hash> OP_EQUAL
+pub fn p2sh_script(script_hash: &[u8; 20]) -> Vec<u8> {
+    let mut s = Vec::with_capacity(23);
+    s.push(0xa9); // OP_HASH160
+    s.push(0x14); // push 20 bytes
+    s.extend_from_slice(script_hash);
+    s.push(0x87); // OP_EQUAL
+    s
+}
+
 /// Decode a bech32 P2WPKH address string to its 20-byte pubkey hash.
 pub fn decode_p2wpkh_address(addr: &str) -> Result<[u8; 20]> {
     let (_, witness_ver, prog) =
@@ -379,11 +399,9 @@ pub fn bch_sighash(
 ///
 /// Returns `(sighash_bytes, sighash_type_byte)`.
 ///
-/// - Bip84 / Bip86 → BIP-143 segwit sighash, byte = 0x01.
+/// - Bip84 / Bip86 / Bip49 → BIP-143 segwit sighash, byte = 0x01.
 /// - Bip44 + BCH → BCH FORKID sighash, byte = 0x41.
 /// - Bip44 (other) → legacy P2PKH sighash, byte = 0x01.
-/// - Bip49 → returns an error (BIP-49 wrapped segwit signing not yet
-///   implemented for LTC/NAV; those chains default to Bip84 anyway).
 pub fn compute_sighash(
     chain: ChainId,
     purpose: Purpose,
@@ -394,7 +412,9 @@ pub fn compute_sighash(
     locktime: u32,
 ) -> Result<([u8; 32], u8)> {
     match purpose {
-        Purpose::Bip84 | Purpose::Bip86 => {
+        Purpose::Bip84 | Purpose::Bip86 | Purpose::Bip49 => {
+            // BIP-49 uses BIP-143 sighash — scriptCode is P2PKH-shaped over
+            // the pubkey hash, identical to native segwit P2WPKH signing.
             let hash = bip143_sighash(inputs, outputs, input_index, version, locktime);
             Ok((hash, 0x01))
         }
@@ -408,9 +428,6 @@ pub fn compute_sighash(
                 Ok((hash, 0x01))
             }
         }
-        Purpose::Bip49 => Err(Error::Chain(
-            "BIP-49 wrapped segwit signing not yet implemented".into(),
-        )),
     }
 }
 
@@ -522,6 +539,120 @@ pub fn sign_inputs_legacy_p2pkh(
         version,
         locktime,
     ))
+}
+
+// ── P2SH-P2WPKH signing (BIP-49) ──────────────────────────────────────────
+
+/// Sign all inputs using P2SH-P2WPKH (BIP-49) and serialize a segwit
+/// transaction.
+///
+/// For each input:
+/// - `scriptSig` = single push of redeemScript (OP_0 <20-byte pubkey-hash>)
+/// - `witness`   = [<DER sig || sighash byte>, <compressed pubkey>]
+/// - sighash via BIP-143 (same scriptCode as native P2WPKH)
+///
+/// The resulting transaction has the segwit marker/flag bytes and a non-empty
+/// scriptSig per input (the 23-byte push of the 22-byte redeemScript), plus
+/// a 2-item witness stack per input.
+pub fn sign_inputs_p2sh_p2wpkh(
+    inputs: &[TxInput],
+    outputs: &[TxOutput],
+    keys: &[[u8; 32]],
+) -> Result<Vec<u8>> {
+    if keys.len() != inputs.len() {
+        return Err(Error::Chain(format!(
+            "key count {} != input count {}",
+            keys.len(),
+            inputs.len()
+        )));
+    }
+
+    let version = 2u32;
+    let locktime = 0u32;
+
+    let mut script_sigs: Vec<Vec<u8>> = Vec::with_capacity(inputs.len());
+    let mut witnesses: Vec<Vec<Vec<u8>>> = Vec::with_capacity(inputs.len());
+
+    for (i, key_bytes) in keys.iter().enumerate() {
+        let sighash = bip143_sighash(inputs, outputs, i, version, locktime);
+
+        let signing_key = SigningKey::from_bytes(key_bytes.into())
+            .map_err(|e| Error::Chain(format!("invalid signing key: {e}")))?;
+
+        let (sig, _recid): (Signature, _) = signing_key
+            .sign_prehash(sighash.as_ref())
+            .map_err(|e| Error::Chain(format!("ecdsa sign: {e}")))?;
+
+        // DER-encode + append SIGHASH_ALL byte.
+        let mut der = sig.to_der().to_bytes().to_vec();
+        der.push(0x01); // SIGHASH_ALL
+
+        let pubkey = signing_key.verifying_key().to_encoded_point(true);
+        let pubkey_bytes: Vec<u8> = pubkey.as_bytes().to_vec();
+
+        // redeemScript = OP_0 <20-byte pubkey-hash> (22 bytes).
+        let redeem = p2sh_p2wpkh_redeem_script(&inputs[i].pubkey_hash);
+
+        // scriptSig = single pushdata of redeemScript.
+        // redeemScript is 22 bytes → OP_PUSHBYTES_22 (0x16).
+        let mut script_sig = Vec::with_capacity(23);
+        push_data(&mut script_sig, &redeem);
+        script_sigs.push(script_sig);
+
+        witnesses.push(vec![der, pubkey_bytes]);
+    }
+
+    Ok(serialize_signed_tx_p2sh_p2wpkh(
+        inputs,
+        outputs,
+        &script_sigs,
+        &witnesses,
+        version,
+        locktime,
+    ))
+}
+
+/// Serialize a P2SH-P2WPKH transaction: segwit marker/flag, non-empty
+/// scriptSig per input, and a witness stack per input.
+fn serialize_signed_tx_p2sh_p2wpkh(
+    inputs: &[TxInput],
+    outputs: &[TxOutput],
+    script_sigs: &[Vec<u8>],
+    witnesses: &[Vec<Vec<u8>>],
+    version: u32,
+    locktime: u32,
+) -> Vec<u8> {
+    let mut tx = Vec::new();
+    tx.extend_from_slice(&version.to_le_bytes());
+    // Segwit marker + flag
+    tx.push(0x00);
+    tx.push(0x01);
+    // vin
+    write_varint(&mut tx, inputs.len() as u64);
+    for (inp, script_sig) in inputs.iter().zip(script_sigs.iter()) {
+        tx.extend_from_slice(&inp.outpoint.txid_bytes);
+        tx.extend_from_slice(&inp.outpoint.vout.to_le_bytes());
+        write_varint(&mut tx, script_sig.len() as u64);
+        tx.extend_from_slice(script_sig);
+        tx.extend_from_slice(&inp.sequence.to_le_bytes());
+    }
+    // vout
+    write_varint(&mut tx, outputs.len() as u64);
+    for out in outputs {
+        tx.extend_from_slice(&out.value_sats.to_le_bytes());
+        write_varint(&mut tx, out.script_pubkey.len() as u64);
+        tx.extend_from_slice(&out.script_pubkey);
+    }
+    // witness data (one stack per input)
+    for wit in witnesses {
+        write_varint(&mut tx, wit.len() as u64);
+        for item in wit {
+            write_varint(&mut tx, item.len() as u64);
+            tx.extend_from_slice(item);
+        }
+    }
+    tx.extend_from_slice(&locktime.to_le_bytes());
+    tx
 }
 
 // ── PSBT v0 serialization ──────────────────────────────────────────────────
@@ -1124,5 +1255,211 @@ mod tests {
         let script_sig_len_offset = 4 + 1 + 36;
         let ss_len = signed[script_sig_len_offset] as usize;
         assert!(ss_len > 0, "first input scriptSig must be non-empty");
+    }
+
+    // ── P2SH-P2WPKH (BIP-49) tests ────────────────────────────────────────
+
+    fn make_bip49_input(key_byte: u8) -> ([u8; 32], TxInput) {
+        let key_bytes = [key_byte; 32];
+        let signing_key = SigningKey::from_bytes((&key_bytes).into()).unwrap();
+        let pubkey: [u8; 33] = signing_key
+            .verifying_key()
+            .to_encoded_point(true)
+            .as_bytes()
+            .try_into()
+            .unwrap();
+        let pubkey_hash = hash160(&pubkey);
+        let inp = TxInput {
+            outpoint: Outpoint::from_str(&"ff".repeat(32), 0).unwrap(),
+            sequence: 0xffff_ffff,
+            value_sats: 100_000,
+            pubkey_hash,
+            pubkey,
+        };
+        (key_bytes, inp)
+    }
+
+    /// scriptSig for P2SH-P2WPKH must be a 23-byte push of the 22-byte
+    /// redeemScript: 0x17 (push-23 — wait, push 22 bytes is 0x16)
+    ///
+    /// Wire layout: varint(23) + [0x16, 0x00, 0x14, <20 bytes>]
+    /// scriptSig bytes: push-opcode(0x16) + redeemScript(22 bytes) = 23 bytes.
+    #[test]
+    fn p2sh_p2wpkh_scriptsig_shape() {
+        let (key_bytes, inp) = make_bip49_input(0x70);
+        let pubkey_hash = inp.pubkey_hash;
+        let out = TxOutput {
+            script_pubkey: {
+                let redeem = p2sh_p2wpkh_redeem_script(&pubkey_hash);
+                let sh = hash160(&redeem);
+                p2sh_script(&sh)
+            },
+            value_sats: 99_000,
+        };
+
+        let signed = sign_inputs_p2sh_p2wpkh(&[inp], &[out], &[key_bytes]).unwrap();
+
+        // Segwit marker/flag present.
+        assert_eq!(signed[4], 0x00, "segwit marker byte must be 0x00");
+        assert_eq!(signed[5], 0x01, "segwit flag byte must be 0x01");
+
+        // vin count = 1 at offset 6.
+        assert_eq!(signed[6], 0x01, "vin count must be 1");
+
+        // Input layout after vin_count(1):
+        //   outpoint: txid(32) + vout(4) = 36 bytes at offset 7
+        //   scriptSig varint at offset 7+36 = 43
+        let ss_varint_offset = 7 + 36;
+        let ss_len = signed[ss_varint_offset] as usize;
+        // scriptSig = push-opcode(1 byte) + redeemScript(22 bytes) = 23 bytes.
+        assert_eq!(ss_len, 23, "scriptSig must be 23 bytes");
+
+        // First byte of scriptSig: OP_PUSHBYTES_22 = 0x16.
+        let ss_start = ss_varint_offset + 1;
+        assert_eq!(
+            signed[ss_start], 0x16,
+            "first scriptSig byte must be 0x16 (push 22)"
+        );
+
+        // redeemScript: OP_0 (0x00) + push-20 (0x14) + pubkey_hash (20 bytes).
+        assert_eq!(
+            signed[ss_start + 1],
+            0x00,
+            "redeemScript must start with OP_0"
+        );
+        assert_eq!(
+            signed[ss_start + 2],
+            0x14,
+            "redeemScript second byte must be 0x14"
+        );
+        let embedded_hash = &signed[ss_start + 3..ss_start + 23];
+        assert_eq!(
+            embedded_hash,
+            pubkey_hash.as_ref(),
+            "embedded hash must match pubkey_hash"
+        );
+    }
+
+    /// Witness for P2SH-P2WPKH must have exactly 2 stack items (sig, pubkey).
+    #[test]
+    fn p2sh_p2wpkh_witness_two_items() {
+        let (key_bytes, inp) = make_bip49_input(0x71);
+        let pubkey_hash = inp.pubkey_hash;
+        let out = TxOutput {
+            script_pubkey: {
+                let redeem = p2sh_p2wpkh_redeem_script(&pubkey_hash);
+                let sh = hash160(&redeem);
+                p2sh_script(&sh)
+            },
+            value_sats: 99_000,
+        };
+
+        let signed = sign_inputs_p2sh_p2wpkh(&[inp], &[out], &[key_bytes]).unwrap();
+
+        // Parse the witness section.
+        // Layout: version(4) + marker(1) + flag(1) + vin_count(1) + input + vout_count(1) + output + witness + locktime(4)
+        // We need to skip to the witness.  Rather than full parsing, check
+        // that byte at (ss_varint_offset + 1 + ss_len + 4) is 0x01 for
+        // vout_count.  Instead, locate the witness stack count byte for input 0.
+        //
+        // Simpler: re-parse by counting bytes from the known structure.
+        let ss_varint_offset = 7 + 36;
+        let ss_len = signed[ss_varint_offset] as usize;
+        // After scriptSig: sequence(4 bytes).
+        let sequence_start = ss_varint_offset + 1 + ss_len;
+        // vout_count varint at sequence_start + 4.
+        let vout_count_offset = sequence_start + 4;
+        let vout_count = signed[vout_count_offset] as usize;
+        assert_eq!(vout_count, 1, "should have 1 output");
+
+        // Skip over the single output: value(8) + scriptPubKey varint + scriptPubKey.
+        let output_start = vout_count_offset + 1;
+        let spk_varint_offset = output_start + 8;
+        let spk_len = signed[spk_varint_offset] as usize;
+        let witness_section_start = spk_varint_offset + 1 + spk_len;
+
+        // Witness for input 0: stack item count.
+        let stack_count = signed[witness_section_start] as usize;
+        assert_eq!(
+            stack_count, 2,
+            "witness must have 2 stack items (sig, pubkey)"
+        );
+    }
+
+    /// Round-trip: sign a P2SH-P2WPKH input and verify the sighash with k256.
+    #[test]
+    fn p2sh_p2wpkh_sighash_sign_and_verify() {
+        use k256::ecdsa::{VerifyingKey, signature::hazmat::PrehashVerifier};
+
+        let (key_bytes, inp) = make_bip49_input(0x72);
+        let pubkey_hash = inp.pubkey_hash;
+        let out = TxOutput {
+            script_pubkey: {
+                let redeem = p2sh_p2wpkh_redeem_script(&pubkey_hash);
+                let sh = hash160(&redeem);
+                p2sh_script(&sh)
+            },
+            value_sats: 99_000,
+        };
+
+        // BIP-49 uses BIP-143 sighash — same as native P2WPKH.
+        let sighash = bip143_sighash(&[inp], &[out], 0, 2, 0);
+
+        let signing_key = SigningKey::from_bytes((&key_bytes).into()).unwrap();
+        let (sig, _): (Signature, _) = signing_key.sign_prehash(&sighash).unwrap();
+        let verifying_key = VerifyingKey::from(&signing_key);
+        verifying_key
+            .verify_prehash(&sighash, &sig)
+            .expect("P2SH-P2WPKH sighash verification must succeed");
+    }
+
+    /// BIP-49 sighash must be deterministic (same as bip143_sighash for same input).
+    #[test]
+    fn p2sh_p2wpkh_sighash_deterministic() {
+        let (_, inp) = make_bip49_input(0x73);
+        let pubkey_hash = inp.pubkey_hash;
+        let out = TxOutput {
+            script_pubkey: {
+                let redeem = p2sh_p2wpkh_redeem_script(&pubkey_hash);
+                let sh = hash160(&redeem);
+                p2sh_script(&sh)
+            },
+            value_sats: 99_000,
+        };
+
+        let inp2 = TxInput {
+            outpoint: Outpoint::from_str(&"ff".repeat(32), 0).unwrap(),
+            sequence: 0xffff_ffff,
+            value_sats: 100_000,
+            pubkey_hash,
+            pubkey: inp.pubkey,
+        };
+        let out2 = TxOutput {
+            script_pubkey: out.script_pubkey.clone(),
+            value_sats: 99_000,
+        };
+
+        let h1 = bip143_sighash(&[inp], &[out], 0, 2, 0);
+        let h2 = bip143_sighash(&[inp2], &[out2], 0, 2, 0);
+        assert_eq!(h1, h2, "BIP-49 sighash must be deterministic");
+    }
+
+    /// p2sh_script produces the correct 23-byte OP_HASH160 <20> OP_EQUAL script.
+    #[test]
+    fn p2sh_script_shape() {
+        let sh = [0xabu8; 20];
+        let script = p2sh_script(&sh);
+        assert_eq!(script.len(), 23);
+        assert_eq!(script[0], 0xa9, "must start with OP_HASH160");
+        assert_eq!(script[1], 0x14, "must have 20-byte push opcode");
+        assert_eq!(&script[2..22], sh.as_ref());
+        assert_eq!(script[22], 0x87, "must end with OP_EQUAL");
+    }
+
+    /// p2sh_p2wpkh_redeem_script is identical to p2wpkh_script for the same hash.
+    #[test]
+    fn redeem_script_equals_p2wpkh_script() {
+        let h = [0x55u8; 20];
+        assert_eq!(p2sh_p2wpkh_redeem_script(&h), p2wpkh_script(&h));
     }
 }

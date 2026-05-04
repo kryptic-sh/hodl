@@ -249,6 +249,23 @@ pub fn p2pkh_scripthash(pubkey_hash: &[u8; 20]) -> String {
     hex::encode(rev)
 }
 
+/// Compute the Electrum scripthash for a P2SH script pubkey.
+///
+/// Electrum uses SHA256(script_pubkey) with bytes reversed (little-endian).
+/// `script_hash` is the HASH160 of the redeemScript (20 bytes).
+pub fn p2sh_scripthash(script_hash: &[u8; 20]) -> String {
+    // P2SH scriptPubKey: OP_HASH160 <20 bytes> OP_EQUAL
+    let mut script = Vec::with_capacity(23);
+    script.push(0xa9); // OP_HASH160
+    script.push(0x14); // push 20 bytes
+    script.extend_from_slice(script_hash);
+    script.push(0x87); // OP_EQUAL
+    let hash: [u8; 32] = Sha256::digest(&script).into();
+    let mut rev = hash;
+    rev.reverse();
+    hex::encode(rev)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

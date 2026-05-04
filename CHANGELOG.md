@@ -10,6 +10,16 @@ and this project adheres to
 
 ### Added
 
+- **Bip49 (P2SH-P2WPKH) signing for LTC/NAV wrapped-segwit addresses** in
+  `hodl-chain-bitcoin`. New helpers: `p2sh_p2wpkh_redeem_script`, `p2sh_script`,
+  `sign_inputs_p2sh_p2wpkh`, `p2sh_scripthash`. Each input gets
+  `scriptSig = pushdata(redeemScript)` and a 2-item witness stack
+  `[sig||hashtype, pubkey]`. `sign_multi_source` dispatches to the new signer
+  for `Purpose::Bip49`; `decode_address_to_script` decodes P2SH base58check
+  addresses and validates the `p2sh_prefix` version byte; `scripthash_for`
+  distinguishes P2SH from P2PKH by version byte. `compute_sighash` no longer
+  errors on `Bip49` — uses BIP-143 sighash (same scriptCode as native P2WPKH).
+
 - **Legacy P2PKH signing** in `hodl-chain-bitcoin`: pre-segwit sighash for
   BTC-family chains (DOGE, NAV-via-Bip44, LTC-via-Bip44) plus BCH's
   BIP-143-shaped FORKID sighash (SIGHASH_ALL | SIGHASH_FORKID = 0x41). New
