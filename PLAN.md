@@ -325,6 +325,90 @@ Post-1.0 candidates: hardware-wallet bridge (Ledger / Trezor via HWI), Lightning
 (LDK), ERC-20 / BEP-20 tokens, Polyseed for Monero, Neutrino for Bitcoin
 privacy, taproot script-path spends.
 
+## Deferred
+
+Items intentionally postponed during the v0.3.x cycle. Each carries a brief
+rationale and any code that hints at the missing piece. Update as items land or
+get re-prioritised.
+
+### NavCoin Phase 2
+
+- **xNAV blsCT shielded balance read.** Needs BLS12-381 dep (likely `blstrs` or
+  `bls12_381`), a separate key derivation rooted in `SECRET_BLSCT_VIEW_KEY`
+  (different from BIP-44), Pedersen commitment + range-proof decryption, and the
+  NAV-specific Electrum method `blockchain.transaction.get_keys`. New crate
+  `hodl-chain-navcoin` (don't pollute `hodl-chain-bitcoin`). xNAV outputs are
+  invisible to the standard `blockchain.scripthash.*` path so a wallet with
+  shielded funds will under-report total balance until this lands.
+- **Cold-staking output visibility.** NavCoin cold-staking outputs use a custom
+  scriptPubKey shape (`isColdStakingOutP2PKH`, `isColdStakingV2Out`) that does
+  not match any standard P2PKH scripthash. navcoin-js queries
+  `blockchain.staking.get_keys` to discover the (spending, staking) key pairs,
+  builds a composite scripthash via `Script.fromAddresses(staking, spending)`,
+  and subscribes via `blockchain.scripthash.subscribe`. hodl's BIP-44 gap scan
+  will silently miss any funds the user has moved into cold staking. Spending
+  cold-staking inputs is out of scope (we're not a staking node).
+- **NAV add-on protocols.** NavNS (`blockchain.dotnav.resolve_name`), DAO
+  (`blockchain.dao.subscribe`, `blockchain.consensus.subscribe`), NavToken
+  (`blockchain.token.get_token`), NavNFT (`blockchain.token.get_nft`), outpoint
+  subscribe (`blockchain.outpoint.subscribe`), staker votes
+  (`blockchain.stakervote.subscribe`). All additive, none blocking; future
+  features.
+- **NAV fee-estimate fallback.** If `blockchain.estimatefee` returns ≤ 0, fall
+  back to navcoin-js's hardcoded default of 100,000 satoshis/kB (0.001 NAV) to
+  avoid zero-fee broadcast attempts. Defensive; not currently observed to fire.
+
+### TUI / UX
+
+- **Streaming Addresses sub-view.** Today the sub-view opens on the post-scan
+  snapshot via `accounts_stash`. Live updates while scan is in flight would need
+  a shared `Arc<Mutex<WalletScan>>` partial state and a poll loop in the
+  Addresses screen. Snapshot semantics are intentional v1.
+- **Per-row spinner in Addresses sub-view.** Currently each row renders the
+  cached value or a static dash. Once the streaming sub-view lands, in-flight
+  rows should show a spinner.
+- **`format_atoms` decimals per chain.** The Addresses table's `format_atoms`
+  assumes 8 decimals (BTC family). Wrong for ETH (18) and Monero (12); not yet
+  visible because EVM/Monero scans degenerate to a single row, but will surface
+  when those chains support multi-row display.
+- **Send build/broadcast retry-on-failure.** The scan worker retries up to 3
+  times on `Network`/`Io`/`Endpoint` errors via `try_endpoints` re-shuffle.
+  `send.rs::build_thread` and `broadcast_thread` are still single-attempt — a
+  network blip mid-broadcast bails. Apply the same pattern.
+- **TOFU mismatch UX.** Today a fingerprint mismatch surfaces as a red
+  status-line error pointing at `known_hosts.toml`. A guided remediation flow
+  (show old vs new fingerprint, offer "trust new" / "stay pinned" / "abort"
+  prompts) would be friendlier — and would let a user re-pin without editing
+  TOML by hand.
+- **Send-screen address book picker.** Wire `hjkl-picker` into the recipient
+  field so the user can select from saved contacts instead of typing the
+  address.
+- **Debug log to file.** Tracing currently goes to stderr only; stderr is
+  swallowed under the alt-screen TUI. A rolling debug log at
+  `<data_root>/hodl.log` (with a sensible env-filter) would let users diagnose
+  failures without re-running outside the TUI.
+
+### Per-chain scan strategies
+
+- **EVM multi-account scan.** `scan_thread::ActiveChain::Ethereum` currently
+  derives a single address (account 0, index 0) and reports its balance. Could
+  scan multiple accounts (`m/44'/60'/N'/0/0` for N=0..gap_limit) to surface
+  multi-account wallets. Same for BSC.
+- **Monero refresh via LWS.** `scan_thread::ActiveChain::Monero` is the same
+  single-derive degenerate path; should hit `lws::get_address_info` /
+  `get_unspent_outs` for proper subaddress account discovery.
+- **ERC-20 token reads.** Original v0.4.0 candidate. `eth_call` against ERC-20
+  contracts to surface stablecoin/token balances on the Ethereum summary card.
+
+### Hardening / hygiene
+
+- **Bip49 wrapped-segwit signing for LTC** is shipped; the `Bip49 → p2wpkh`
+  fallback in `purpose_script` is now reachable, so the dead-code marker is gone
+  — keep an eye on this if more chains add Bip49 support.
+- **Real-network smoke CI.** The curated default Electrum servers are manually
+  probed on demand; add a CI workflow (or scheduled job) that does a smoke
+  connect + `server.version` against each, opening an issue when one goes down.
+
 ## Open Questions
 
 - **Price feed.** Single source (CoinGecko) or none? Adds a network call per
