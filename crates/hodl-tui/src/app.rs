@@ -205,7 +205,9 @@ impl App {
                     }
 
                     let ev = event::read()?;
-                    if matches!(&ev, Event::Key(k) if k.kind == KeyEventKind::Press) {
+                    if matches!(&ev, Event::Key(k) if k.kind == KeyEventKind::Press)
+                        || matches!(&ev, Event::Mouse(_))
+                    {
                         self.last_activity = Instant::now();
                     }
 
@@ -326,7 +328,9 @@ impl App {
                     }
 
                     let ev = event::read()?;
-                    if matches!(&ev, Event::Key(k) if k.kind == KeyEventKind::Press) {
+                    if matches!(&ev, Event::Key(k) if k.kind == KeyEventKind::Press)
+                        || matches!(&ev, Event::Mouse(_))
+                    {
                         self.last_activity = Instant::now();
                     }
 
@@ -414,7 +418,9 @@ impl App {
                     }
 
                     let ev = event::read()?;
-                    if matches!(&ev, Event::Key(k) if k.kind == KeyEventKind::Press) {
+                    if matches!(&ev, Event::Key(k) if k.kind == KeyEventKind::Press)
+                        || matches!(&ev, Event::Mouse(_))
+                    {
                         self.last_activity = Instant::now();
                     }
 
