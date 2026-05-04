@@ -43,26 +43,29 @@ pub struct AddressesState {
 }
 
 impl AddressesState {
-    /// Build from a completed `WalletScan`.
+    /// Build from a completed `WalletScan` and a parallel slice of derivation
+    /// path strings (one per `scan.used` entry, in order).
     ///
-    /// `derivation_path_fn` is called with `(change, index)` for each row and
-    /// returns the human-readable BIP-44 path string. Passing the closure from
-    /// app.rs avoids a hard dependency on `ActiveChain` here.
+    /// Caller is responsible for computing the paths up front — passing a
+    /// closure here would tempt callers into rebuilding an `ActiveChain` (and
+    /// dialing the network) once per row. Compute the paths once outside.
     ///
     /// Sort order: receive (change=0) first by index ascending, then change
     /// (change=1) by index ascending. The first row is selected by default.
-    pub fn new(
-        scan: &WalletScan,
-        chain: ChainId,
-        derivation_path_fn: impl Fn(u32, u32) -> String,
-    ) -> Self {
+    pub fn new(scan: &WalletScan, chain: ChainId, paths: &[String]) -> Self {
+        assert_eq!(
+            scan.used.len(),
+            paths.len(),
+            "paths must be parallel to scan.used"
+        );
         let mut rows: Vec<AddressRow> = scan
             .used
             .iter()
-            .map(|u| AddressRow {
+            .zip(paths.iter())
+            .map(|(u, path)| AddressRow {
                 index: u.index,
                 change: u.change,
-                path: derivation_path_fn(u.change, u.index),
+                path: path.clone(),
                 address: u.address.clone(),
                 confirmed: u.balance.confirmed,
                 pending: u.balance.pending,

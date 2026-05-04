@@ -13,6 +13,7 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 
 use hodl_config::{AddressBook, Config};
+use hodl_core::ChainId;
 use hodl_wallet::{UnlockedWallet, Wallet};
 
 use crate::account::{self, AccountAction, AccountState};
@@ -321,41 +322,47 @@ impl App {
                             }
                         }
                         Some(AccountAction::OpenAddresses) => {
-                            // Take the AccountState out of the screen so we can
-                            // stash it. The screen temporarily holds a sentinel
-                            // Lock value while we build the Addresses state.
+                            // Take the AccountState out of the screen so we
+                            // can stash it. The screen temporarily holds a
+                            // sentinel Lock value while we build Addresses.
                             let old_screen = std::mem::replace(&mut self.screen, Screen::Lock);
                             if let Screen::Accounts(acc_state) = old_screen {
                                 let chain = acc_state.current_chain;
                                 let scan = acc_state.scan.clone();
-                                // Stash the AccountState before transitioning.
                                 self.accounts_stash = Some(acc_state);
 
                                 match scan {
                                     None => {
-                                        // `d` is gated on scan being present in
-                                        // account.rs, so this branch is defensive.
                                         tracing::debug!(
                                             "OpenAddresses fired with no scan — ignoring"
                                         );
-                                        // Restore the stash immediately.
                                         if let Some(stashed) = self.accounts_stash.take() {
                                             self.screen = Screen::Accounts(stashed);
                                         }
                                     }
                                     Some(scan) => {
-                                        let config = self.config.clone();
-                                        let path_fn = move |change: u32, index: u32| {
-                                            match crate::active_chain::ActiveChain::from_chain_id(
-                                                chain, &config,
-                                            ) {
-                                                Ok(active) => {
-                                                    active.path_with_change(0, change, index)
-                                                }
-                                                Err(_) => "?".to_string(),
-                                            }
+                                        // Compute paths up front — no network.
+                                        // BIP-44 family path: m/{purpose}'/{coin}'/{account}'/{change}/{index}
+                                        // BTC family purpose comes from the chain's default_send_purpose;
+                                        // EVM and Monero are pinned at BIP-44.
+                                        let coin = chain.slip44();
+                                        let purpose: u32 = match chain {
+                                            ChainId::Ethereum
+                                            | ChainId::BscMainnet
+                                            | ChainId::Monero => 44,
+                                            _ => hodl_chain_bitcoin::BitcoinChain::default_send_purpose(chain).number(),
                                         };
-                                        let addr_state = AddressesState::new(&scan, chain, path_fn);
+                                        let paths: Vec<String> = scan
+                                            .used
+                                            .iter()
+                                            .map(|u| {
+                                                format!(
+                                                    "m/{purpose}'/{coin}'/0'/{}/{}",
+                                                    u.change, u.index
+                                                )
+                                            })
+                                            .collect();
+                                        let addr_state = AddressesState::new(&scan, chain, &paths);
                                         self.screen = Screen::Addresses(Box::new(addr_state));
                                     }
                                 }
