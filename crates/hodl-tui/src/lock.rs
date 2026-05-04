@@ -9,10 +9,24 @@
 //!
 //! `w` opens a wallet-switcher overlay (`hjkl-picker`) listing all `.vault`
 //! files discovered in the data root. Selecting one emits `Outcome::SwitchWallet`.
+//!
+//! ## Unlock flow
+//!
+//! When the user submits the password, the argon2id KDF (~1–2 s on production
+//! params) is run **off the UI thread** via `std::thread::spawn`. A
+//! `std::sync::mpsc::channel` carries the result back. While a decrypt attempt
+//! is in flight, `pending_unlock` holds the `Receiver` end. The event loop
+//! polls it each tick with `try_recv` and renders an animated braille spinner
+//! so the user knows the app is working.
+//!
+//! Key presses are ignored while `pending_unlock` is `Some` — argon2id is
+//! uninterruptible, so cancellation is not meaningful; ignoring keys prevents
+//! queueing a second submit attempt on top of the in-flight one.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -42,6 +56,9 @@ pub enum Outcome {
     SwitchWallet(String),
 }
 
+/// Braille spinner frames — cycles at ~80 ms per frame.
+const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+
 /// Run the event loop until the user quits, wallet auto-locks, or unlocks.
 pub fn event_loop<B: Backend>(
     terminal: &mut Terminal<B>,
@@ -56,6 +73,32 @@ where
     let mut help_overlay: Option<HelpOverlay> = None;
 
     loop {
+        // ── Poll pending unlock ───────────────────────────────────────────
+        if let Some(rx) = &state.pending_unlock {
+            match rx.try_recv() {
+                Ok(Ok(unlocked)) => {
+                    state.pending_unlock = None;
+                    return Ok(Outcome::Unlocked(unlocked));
+                }
+                Ok(Err(e)) => {
+                    state.pending_unlock = None;
+                    state.message = Some((format!("{e}"), MessageKind::Error));
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    // Still computing — advance spinner and redraw below.
+                    state.spinner_frame = (state.spinner_frame + 1) % SPINNER_FRAMES.len();
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    state.pending_unlock = None;
+                    state.message = Some((
+                        "unlock thread panicked — try again".into(),
+                        MessageKind::Error,
+                    ));
+                }
+            }
+        }
+
+        // ── Render ────────────────────────────────────────────────────────
         terminal.draw(|f| {
             let area = f.area();
             draw_locked(f, area, &mut state);
@@ -64,19 +107,35 @@ where
             }
         })?;
 
+        // ── Idle auto-lock ────────────────────────────────────────────────
         if state.last_activity.elapsed() >= idle_timeout {
             state.last_activity = Instant::now();
             state.message = Some(("auto-locked (idle)".into(), MessageKind::Info));
             continue;
         }
 
-        let wait = Duration::from_millis(250);
+        // ── Event polling ─────────────────────────────────────────────────
+        // Use a short 80 ms timeout while the spinner is running so animation
+        // stays smooth; fall back to 250 ms when idle to save CPU.
+        let wait = if state.pending_unlock.is_some() {
+            Duration::from_millis(80)
+        } else {
+            Duration::from_millis(250)
+        };
+
         if !event::poll(wait)? {
             continue;
         }
 
         match event::read()? {
             Event::Key(k) if k.kind == KeyEventKind::Press => {
+                // Ignore ALL keypresses while an unlock is in flight.
+                // argon2id is uninterruptible; queuing another submit would
+                // cause a double-attempt the moment the first finishes.
+                if state.pending_unlock.is_some() {
+                    continue;
+                }
+
                 state.last_activity = Instant::now();
 
                 // Overlay absorbs all keys when open.
@@ -117,6 +176,12 @@ pub(crate) struct LockState {
     pub(crate) last_activity: Instant,
     /// Wallet switcher picker overlay. `None` when closed.
     picker: Option<hjkl_picker::Picker>,
+    /// In-flight unlock attempt channel. `Some` while argon2id is running.
+    /// All key input is ignored while this is `Some` because the KDF is
+    /// uninterruptible — accepting more input would only queue a race.
+    pending_unlock: Option<Receiver<Result<UnlockedWallet>>>,
+    /// Current frame index into `SPINNER_FRAMES` for the decrypting animation.
+    spinner_frame: usize,
 }
 
 fn make_password_form() -> Form {
@@ -133,6 +198,8 @@ impl LockState {
             message: None,
             last_activity: Instant::now(),
             picker: None,
+            pending_unlock: None,
+            spinner_frame: 0,
         }
     }
 
@@ -148,14 +215,49 @@ impl LockState {
         ]
     }
 
-    /// Extract the password bytes, wipe the field, then attempt unlock.
-    /// Returns the `UnlockedWallet` on success, or populates the error message.
+    /// Spawn the unlock attempt on a background thread and store the receiver
+    /// so the event loop can poll for the result. The password bytes are moved
+    /// into the thread; the field is wiped immediately after extraction.
+    fn start_unlock(&mut self, wallet: &Wallet) {
+        let pw_text = match self.form.fields.first() {
+            Some(Field::SingleLineText(f)) => f.text(),
+            _ => String::new(),
+        };
+        let pw_bytes: Vec<u8> = pw_text.into_bytes();
+        self.wipe_field();
+
+        // Clone the Wallet handle — it only holds a name + PathBuf, no secrets.
+        let wallet_clone = wallet.clone();
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = wallet_clone.unlock(&pw_bytes);
+            // Safety: pw_bytes is zeroized here, before the thread exits.
+            let mut pw = pw_bytes;
+            pw.zeroize();
+            // If the receiver has already been dropped (shouldn't happen), ignore.
+            let _ = tx.send(result.map_err(anyhow::Error::from));
+        });
+
+        self.pending_unlock = Some(rx);
+        self.spinner_frame = 0;
+        self.message = None;
+    }
+
+    /// Rebuild the form field to an empty state, zeroizing any backing memory.
+    fn wipe_field(&mut self) {
+        if let Some(Field::SingleLineText(f)) = self.form.fields.first_mut() {
+            f.set_text("");
+        }
+    }
+
+    /// Synchronous unlock — used only by unit tests where threading is overkill.
+    #[cfg(test)]
     fn submit_password(&mut self, wallet: &Wallet) -> Option<UnlockedWallet> {
         let pw_text = match self.form.fields.first() {
             Some(Field::SingleLineText(f)) => f.text(),
             _ => String::new(),
         };
-
         let mut pw_bytes: Vec<u8> = pw_text.into_bytes();
 
         let result = match wallet.unlock(&pw_bytes) {
@@ -172,13 +274,6 @@ impl LockState {
         pw_bytes.zeroize();
         self.wipe_field();
         result
-    }
-
-    /// Rebuild the form field to an empty state, zeroizing any backing memory.
-    fn wipe_field(&mut self) {
-        if let Some(Field::SingleLineText(f)) = self.form.fields.first_mut() {
-            f.set_text("");
-        }
     }
 }
 
@@ -227,9 +322,7 @@ fn handle_key(
     }
 
     if k.code == KeyCode::Enter {
-        if let Some(unlocked) = state.submit_password(wallet) {
-            return Some(Outcome::Unlocked(unlocked));
-        }
+        state.start_unlock(wallet);
         return None;
     }
 
@@ -349,7 +442,16 @@ fn draw_locked(f: &mut ratatui::Frame, area: Rect, state: &mut LockState) {
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(prompt, chunks[1]);
 
-    if let Some((msg, kind)) = &state.message {
+    // Show spinner while decrypting, otherwise show any status message.
+    if state.pending_unlock.is_some() {
+        let frame = SPINNER_FRAMES[state.spinner_frame];
+        let spinner_line = Line::from(vec![Span::styled(
+            format!("decrypting…  {frame}"),
+            Style::default().fg(Color::Cyan),
+        )]);
+        let p = Paragraph::new(spinner_line).alignment(Alignment::Center);
+        f.render_widget(p, chunks[2]);
+    } else if let Some((msg, kind)) = &state.message {
         let style = match kind {
             MessageKind::Info => Style::default().fg(Color::Cyan),
             MessageKind::Error => Style::default().fg(Color::Red),

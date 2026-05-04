@@ -8,6 +8,12 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Vault unlock no longer freezes the TUI** — argon2id KDF runs on a background
+  thread; the lock screen shows a `decrypting… ⠋` spinner during the ~1–2 s wait
+  instead of hanging with no feedback.
+
 ### Added
 
 - **Contextual help overlay (`?` / `F1`) per screen** — every TUI screen now
