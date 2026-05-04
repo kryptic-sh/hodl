@@ -55,7 +55,18 @@ enum ScanEvent {
     Done(WalletScan),
     /// Scan errored. Surface via scan_error; clear pending.
     Error(String),
+    /// Mid-scan network failure — UI should clear `partial_scan` so the
+    /// retry attempt rebuilds from scratch (avoids duplicate Used entries
+    /// from the previous server's partial result). The worker logs the
+    /// underlying reason via `tracing::debug!`; the UI surfaces only the
+    /// attempt count in the status line.
+    Reset { attempt: u32 },
 }
+
+/// Maximum scan attempts before giving up. Each attempt rebuilds the
+/// `ActiveChain` (via `from_chain_id` → `try_endpoints`), which re-shuffles
+/// the endpoint list, so successive attempts try different servers.
+const MAX_SCAN_ATTEMPTS: u32 = 3;
 
 /// Action emitted by the account screen to the parent app loop.
 #[derive(Debug)]
@@ -98,6 +109,10 @@ pub struct AccountState {
     /// Partial result accumulated from `ScanEvent::Used` events while
     /// `pending_scan` is `Some`. Promoted to `self.scan` on `ScanEvent::Done`.
     partial_scan: WalletScan,
+    /// Current retry attempt (1 = first attempt, increments on Reset).
+    /// Surfaced in the status line so the user can see the wallet is
+    /// failing over to a different Electrum server.
+    scan_attempt: u32,
     /// Spinner shown while `pending_scan` is active.
     scanning_spinner: Option<Spinner>,
     /// Chain picker overlay. `None` when closed.
@@ -118,6 +133,7 @@ impl AccountState {
             scan_error: None,
             pending_scan: None,
             partial_scan: WalletScan::default(),
+            scan_attempt: 0,
             scanning_spinner: None,
             picker: None,
             picker_chains: Vec::new(),
@@ -173,6 +189,14 @@ impl AccountState {
                     self.scanning_spinner = None;
                     return true;
                 }
+                Ok(ScanEvent::Reset { attempt }) => {
+                    // Worker hit a network error and is failing over to a
+                    // different Electrum server. Drop the partial state from
+                    // the previous attempt; the retry rebuilds from scratch.
+                    self.partial_scan = WalletScan::default();
+                    self.scan_attempt = attempt;
+                    changed = true;
+                }
                 Err(TryRecvError::Empty) => {
                     if !changed {
                         self.tick_spinner();
@@ -205,6 +229,7 @@ impl AccountState {
         self.scan = None;
         self.scan_error = None;
         self.partial_scan = WalletScan::default();
+        self.scan_attempt = 1;
         self.flash = None;
 
         let chain = self.current_chain;
@@ -387,11 +412,64 @@ fn scan_thread_streaming(
 ) {
     debug!("scan_thread_streaming for chain {:?}", chain);
 
+    // Outer retry loop: each attempt rebuilds the ActiveChain via
+    // `from_chain_id` → `try_endpoints`, which re-shuffles the endpoint
+    // list. So consecutive attempts try different servers (with a small
+    // random chance of repeating). Capped at MAX_SCAN_ATTEMPTS.
+    for attempt in 1..=MAX_SCAN_ATTEMPTS {
+        // After the first attempt, signal a reset so the UI clears any
+        // partial Used entries from the previous server's run.
+        if attempt > 1 {
+            let _ = tx.send(ScanEvent::Reset { attempt });
+        }
+
+        let outcome = run_scan_attempt(chain, config, seed, gap_limit, account, tx);
+        match outcome {
+            AttemptResult::Done => return,
+            AttemptResult::Fatal(msg) => {
+                let _ = tx.send(ScanEvent::Error(msg));
+                return;
+            }
+            AttemptResult::Retry(reason) => {
+                debug!("scan attempt {attempt} failed: {reason}; retrying");
+                if attempt == MAX_SCAN_ATTEMPTS {
+                    let _ = tx.send(ScanEvent::Error(format!(
+                        "{}: all {MAX_SCAN_ATTEMPTS} endpoints failed; last error: {reason}",
+                        chain.display_name()
+                    )));
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// Outcome of a single scan attempt against a freshly-built ActiveChain.
+enum AttemptResult {
+    /// Scan completed successfully — `ScanEvent::Done` was already sent.
+    Done,
+    /// Non-retryable error (config, codec, chain logic). Surface to UI as
+    /// the final scan_error and stop trying.
+    Fatal(String),
+    /// Retryable error (network/IO). Outer loop will reconnect to a
+    /// different server and try again.
+    Retry(String),
+}
+
+fn run_scan_attempt(
+    chain: ChainId,
+    config: &Config,
+    seed: &[u8; 64],
+    gap_limit: u32,
+    account: u32,
+    tx: &std::sync::mpsc::Sender<ScanEvent>,
+) -> AttemptResult {
     let active = match ActiveChain::from_chain_id(chain, config) {
         Ok(a) => a,
         Err(e) => {
-            let _ = tx.send(ScanEvent::Error(format!("{}: {e}", chain.display_name())));
-            return;
+            // Connect failure across all endpoints — try_endpoints already
+            // retried internally, no point in retrying at this layer.
+            return classify(chain, "connect", e);
         }
     };
 
@@ -404,94 +482,69 @@ fn scan_thread_streaming(
             match btc_chain.scan_used_addresses_streaming(seed, account, gap_limit, &mut on_used) {
                 Ok(scan) => {
                     let _ = tx.send(ScanEvent::Done(scan));
+                    AttemptResult::Done
                 }
-                Err(e) => {
-                    let _ = tx.send(ScanEvent::Error(format!("{}: {e}", chain.display_name())));
-                }
+                Err(e) => classify(chain, "scan", e),
             }
         }
-        ActiveChain::Ethereum(eth_chain) => {
-            // EVM uses a single derived address — build a degenerate 1-entry scan.
-            let addr_str = match eth_chain.derive(seed, account, 0) {
-                Ok(a) => a,
-                Err(e) => {
-                    let _ = tx.send(ScanEvent::Error(format!(
-                        "{}: derive: {e}",
-                        chain.display_name()
-                    )));
-                    return;
-                }
-            };
-            let balance_amount = match eth_chain.balance(&addr_str) {
-                Ok(b) => b,
-                Err(e) => {
-                    let _ = tx.send(ScanEvent::Error(format!(
-                        "{}: balance: {e}",
-                        chain.display_name()
-                    )));
-                    return;
-                }
-            };
-            let balance_atoms = balance_amount.atoms() as u64;
-            let balance_split = hodl_chain_bitcoin::BalanceSplit {
-                confirmed: balance_atoms,
+        ActiveChain::Ethereum(eth_chain) => single_address_scan(chain, tx, || {
+            let addr = eth_chain
+                .derive(seed, account, 0)
+                .map_err(|e| (e, "derive"))?;
+            let amount = eth_chain.balance(&addr).map_err(|e| (e, "balance"))?;
+            Ok((addr.as_str().to_string(), amount.atoms() as u64))
+        }),
+        ActiveChain::Monero(xmr_chain) => single_address_scan(chain, tx, || {
+            let addr = xmr_chain
+                .derive(seed, account, 0)
+                .map_err(|e| (e, "derive"))?;
+            let amount = xmr_chain.balance(&addr).map_err(|e| (e, "balance"))?;
+            Ok((addr.as_str().to_string(), amount.atoms() as u64))
+        }),
+    }
+}
+
+/// Map a `hodl_core::Error` into an `AttemptResult` via its retry-ability:
+/// network/IO failures retry; everything else is fatal.
+fn classify(chain: ChainId, stage: &str, e: hodl_core::error::Error) -> AttemptResult {
+    use hodl_core::error::Error;
+    let msg = format!("{}: {stage}: {e}", chain.display_name());
+    match e {
+        Error::Network(_) | Error::Io(_) | Error::Endpoint(_) => AttemptResult::Retry(msg),
+        Error::Codec(_) | Error::Chain(_) | Error::Config(_) => AttemptResult::Fatal(msg),
+    }
+}
+
+/// Run a single derive-and-balance call as one Used + one Done event.
+/// Used by EVM/Monero where the wallet has only one externally-derived
+/// address. The closure returns `(address_string, balance_atoms)`.
+fn single_address_scan(
+    chain: ChainId,
+    tx: &std::sync::mpsc::Sender<ScanEvent>,
+    work: impl FnOnce() -> std::result::Result<(String, u64), (hodl_core::error::Error, &'static str)>,
+) -> AttemptResult {
+    match work() {
+        Ok((address, atoms)) => {
+            let balance = hodl_chain_bitcoin::BalanceSplit {
+                confirmed: atoms,
                 pending: 0,
             };
             let used = UsedAddress {
                 index: 0,
                 change: 0,
-                address: addr_str.as_str().to_string(),
-                balance: balance_split,
+                address,
+                balance,
             };
             let _ = tx.send(ScanEvent::Used(used.clone()));
             let _ = tx.send(ScanEvent::Done(WalletScan {
-                total: balance_split,
+                total: balance,
                 used: vec![used],
                 highest_index_receive: 0,
                 highest_index_change: 0,
             }));
+            AttemptResult::Done
         }
-        ActiveChain::Monero(xmr_chain) => {
-            // Monero uses a single derived address — build a degenerate 1-entry scan.
-            let addr_str = match xmr_chain.derive(seed, account, 0) {
-                Ok(a) => a,
-                Err(e) => {
-                    let _ = tx.send(ScanEvent::Error(format!(
-                        "{}: derive: {e}",
-                        chain.display_name()
-                    )));
-                    return;
-                }
-            };
-            let balance_amount = match xmr_chain.balance(&addr_str) {
-                Ok(b) => b,
-                Err(e) => {
-                    let _ = tx.send(ScanEvent::Error(format!(
-                        "{}: balance: {e}",
-                        chain.display_name()
-                    )));
-                    return;
-                }
-            };
-            let balance_atoms = balance_amount.atoms() as u64;
-            let balance_split = hodl_chain_bitcoin::BalanceSplit {
-                confirmed: balance_atoms,
-                pending: 0,
-            };
-            let used = UsedAddress {
-                index: 0,
-                change: 0,
-                address: addr_str.as_str().to_string(),
-                balance: balance_split,
-            };
-            let _ = tx.send(ScanEvent::Used(used.clone()));
-            let _ = tx.send(ScanEvent::Done(WalletScan {
-                total: balance_split,
-                used: vec![used],
-                highest_index_receive: 0,
-                highest_index_change: 0,
-            }));
-        }
+        Err((e, stage)) => classify(chain, stage, e),
     }
 }
 
@@ -673,8 +726,13 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
             .map(|s| s.current())
             .unwrap_or("⠋");
         let n = state.partial_scan.used.len();
+        let attempt_suffix = if state.scan_attempt > 1 {
+            format!(" (attempt {}/{MAX_SCAN_ATTEMPTS})", state.scan_attempt)
+        } else {
+            String::new()
+        };
         (
-            format!("{chain_name} · scanning {n} used so far  {frame}"),
+            format!("{chain_name} · scanning {n} used so far{attempt_suffix}  {frame}"),
             Color::Cyan,
         )
     } else if let Some(ref err) = state.scan_error {
