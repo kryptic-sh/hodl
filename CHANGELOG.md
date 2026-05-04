@@ -10,6 +10,13 @@ and this project adheres to
 
 ### Added
 
+- **`cargo-deny` in CI** — strict gate on advisories, licenses, bans
+  (multiple-versions, wildcards), and sources. Workspace `toml` bumped from
+  `0.8` to `1` to match `hjkl-config` and collapse the
+  `winnow`/`toml_datetime`/`serde_spanned` duplicate-dep cluster.
+  Intra-workspace path deps now carry an explicit `version = "0.3"` so they no
+  longer trigger the wildcard-deny rule.
+
 - **Bip49 (P2SH-P2WPKH) signing for LTC/NAV wrapped-segwit addresses** in
   `hodl-chain-bitcoin`. New helpers: `p2sh_p2wpkh_redeem_script`, `p2sh_script`,
   `sign_inputs_p2sh_p2wpkh`, `p2sh_scripthash`. Each input gets

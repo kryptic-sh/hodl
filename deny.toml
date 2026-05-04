@@ -1,0 +1,44 @@
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    # webpki-roots — Mozilla CA bundle
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+allow-wildcard-paths = true
+# Transitive duplicates we can't collapse without forking upstream:
+# - thiserror 1.x: pinned by base58-monero
+# - getrandom 0.2.x: pinned by bip32 → rand_core 0.6
+# - windows-sys 0.52: transitive on Windows builds only
+skip = [
+    { crate = "thiserror@1" },
+    { crate = "thiserror-impl@1" },
+    { crate = "getrandom@0.2" },
+    { crate = "windows-sys@0.52" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -28,7 +28,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+toml = "1"
 hjkl-config = "0.2"
 hjkl-form = { version = "0.3", features = ["crossterm"] }
 hjkl-ratatui = "0.3"
@@ -64,13 +64,13 @@ tiny-keccak = { version = "2", features = ["keccak"] }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
 base58-monero = "2"
 
-hodl-core = { path = "crates/hodl-core" }
-hodl-tui = { path = "crates/hodl-tui" }
-hodl-config = { path = "crates/hodl-config" }
-hodl-wallet = { path = "crates/hodl-wallet" }
-hodl-chain-bitcoin = { path = "crates/hodl-chain-bitcoin" }
-hodl-chain-ethereum = { path = "crates/hodl-chain-ethereum" }
-hodl-chain-monero = { path = "crates/hodl-chain-monero" }
+hodl-core = { path = "crates/hodl-core", version = "0.3" }
+hodl-tui = { path = "crates/hodl-tui", version = "0.3" }
+hodl-config = { path = "crates/hodl-config", version = "0.3" }
+hodl-wallet = { path = "crates/hodl-wallet", version = "0.3" }
+hodl-chain-bitcoin = { path = "crates/hodl-chain-bitcoin", version = "0.3" }
+hodl-chain-ethereum = { path = "crates/hodl-chain-ethereum", version = "0.3" }
+hodl-chain-monero = { path = "crates/hodl-chain-monero", version = "0.3" }
 
 [profile.release]
 lto = "thin"
