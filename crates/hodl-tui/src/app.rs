@@ -197,7 +197,7 @@ impl App {
                             if let Screen::Accounts(s) = &mut self.screen {
                                 account::draw(f, area, s);
                             }
-                            if let Some(ref overlay) = self.help_overlay {
+                            if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
                             }
                         })?;
@@ -222,7 +222,7 @@ impl App {
                             if let Screen::Accounts(s) = &mut self.screen {
                                 account::draw(f, area, s);
                             }
-                            if let Some(ref overlay) = self.help_overlay {
+                            if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
                             }
                         })?;
@@ -306,7 +306,7 @@ impl App {
                             if let Screen::AddressBook(s) = &mut self.screen {
                                 address_book::draw(f, area, s);
                             }
-                            if let Some(ref overlay) = self.help_overlay {
+                            if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
                             }
                         })?;
@@ -331,7 +331,7 @@ impl App {
                             if let Screen::AddressBook(s) = &mut self.screen {
                                 address_book::draw(f, area, s);
                             }
-                            if let Some(ref overlay) = self.help_overlay {
+                            if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
                             }
                         })?;
@@ -385,7 +385,7 @@ impl App {
                             if let Screen::Receive(s) = &mut self.screen {
                                 receive::draw(f, area, s);
                             }
-                            if let Some(ref overlay) = self.help_overlay {
+                            if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
                             }
                         })?;
@@ -410,7 +410,7 @@ impl App {
                             if let Screen::Receive(s) = &mut self.screen {
                                 receive::draw(f, area, s);
                             }
-                            if let Some(ref overlay) = self.help_overlay {
+                            if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
                             }
                         })?;

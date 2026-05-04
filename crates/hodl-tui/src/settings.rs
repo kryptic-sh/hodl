@@ -157,7 +157,7 @@ where
         terminal.draw(|f| {
             let area = f.area();
             draw(f, area, state);
-            if let Some(ref overlay) = help_overlay {
+            if let Some(ref mut overlay) = help_overlay {
                 overlay.draw(f, area);
             }
         })?;

@@ -31,6 +31,9 @@ pub struct HelpOverlay {
     lines: Vec<(String, String)>,
     scroll: u16,
     title: String,
+    /// Body rows visible at last draw — used by `handle_key` to clamp scroll
+    /// against the bottom edge instead of `lines.len() - 1`.
+    last_visible_rows: u16,
 }
 
 impl HelpOverlay {
@@ -39,16 +42,22 @@ impl HelpOverlay {
             lines,
             scroll: 0,
             title: title.into(),
+            last_visible_rows: 0,
         }
     }
 
+    fn max_scroll(&self) -> u16 {
+        let visible = self.last_visible_rows.max(1) as usize;
+        self.lines.len().saturating_sub(visible) as u16
+    }
+
     /// Draw the overlay centred at ~60% width, up to ~70% height.
-    pub fn draw(&self, f: &mut Frame, area: Rect) {
+    pub fn draw(&mut self, f: &mut Frame, area: Rect) {
         let w = ((area.width as f32) * 0.60) as u16;
         let max_h = ((area.height as f32) * 0.70) as u16;
-        // 2 border rows + 1 header row (separator) + body
+        // 2 border rows + content + 1 footer row.
         let content_rows = self.lines.len() as u16;
-        let h = (2 + content_rows).min(max_h).max(5);
+        let h = (2 + content_rows + 1).min(max_h).max(5);
 
         let x = area.x + (area.width.saturating_sub(w)) / 2;
         let y = area.y + (area.height.saturating_sub(h)) / 2;
@@ -85,6 +94,9 @@ impl HelpOverlay {
         let desc_col = inner.width.saturating_sub(key_col);
 
         let visible_rows = body_area.height as usize;
+        self.last_visible_rows = body_area.height;
+        // Clamp scroll if the overlay shrunk since the last keypress.
+        self.scroll = self.scroll.min(self.max_scroll());
         let start = self.scroll as usize;
         let end = (start + visible_rows).min(self.lines.len());
 
@@ -139,10 +151,7 @@ impl HelpOverlay {
                 HelpAction::Close
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                let max = self.lines.len().saturating_sub(1) as u16;
-                if self.scroll < max {
-                    self.scroll += 1;
-                }
+                self.scroll = (self.scroll + 1).min(self.max_scroll());
                 HelpAction::Scroll
             }
             KeyCode::Char('k') | KeyCode::Up => {
@@ -154,7 +163,7 @@ impl HelpOverlay {
                 HelpAction::Scroll
             }
             KeyCode::Char('G') | KeyCode::End => {
-                self.scroll = self.lines.len().saturating_sub(1) as u16;
+                self.scroll = self.max_scroll();
                 HelpAction::Scroll
             }
             _ => HelpAction::None,
@@ -177,6 +186,25 @@ mod tests {
             kind: KeyEventKind::Press,
             state: KeyEventState::empty(),
         }
+    }
+
+    #[test]
+    fn scroll_clamps_to_max_visible_window() {
+        let lines: Vec<_> = (0..10)
+            .map(|i| (i.to_string(), format!("line {i}")))
+            .collect();
+        let mut overlay = HelpOverlay::new("Test", lines);
+        // Simulate a draw that fit 4 visible rows.
+        overlay.last_visible_rows = 4;
+        // 10 lines, 4 visible → max scroll = 6.
+        for _ in 0..20 {
+            overlay.handle_key(press(KeyCode::Char('j')));
+        }
+        assert_eq!(overlay.scroll, 6);
+        // G also clamps to 6, not 9.
+        overlay.scroll = 0;
+        overlay.handle_key(press(KeyCode::Char('G')));
+        assert_eq!(overlay.scroll, 6);
     }
 
     #[test]

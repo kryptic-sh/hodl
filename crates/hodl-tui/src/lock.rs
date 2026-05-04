@@ -59,7 +59,7 @@ where
         terminal.draw(|f| {
             let area = f.area();
             draw_locked(f, area, &mut state);
-            if let Some(ref overlay) = help_overlay {
+            if let Some(ref mut overlay) = help_overlay {
                 overlay.draw(f, area);
             }
         })?;
