@@ -931,10 +931,14 @@
 
       <section id="install">
         <h2>install</h2>
-        <h3>Build from source — no prebuilt binaries yet.</h3>
+        <h3>
+          Prebuilt binaries on every release; AUR for Arch; build from source
+          anywhere else.
+        </h3>
         <p style="color: var(--fg-muted); margin: 0 0 20px">
-          Pre-MVP. Once chain support stabilises, releases will ship binaries
-          for Linux, macOS, and Windows alongside SHA-256 sidecars.
+          Each tagged release ships x86_64 + aarch64 Linux (glibc 2.28), Windows
+          MSVC, and macOS (Intel + Apple Silicon) binaries with SHA-256
+          sidecars. Arch users can install via the AUR.
         </p>
         <div class="cta">
           <a
@@ -946,11 +950,38 @@
           >
           <a
             class="btn"
+            href="https://aur.archlinux.org/packages/hodl-bin"
+            target="_blank"
+            rel="noopener"
+            >AUR (hodl-bin) ↗</a
+          >
+          <a
+            class="btn"
             href="https://github.com/kryptic-sh/hodl/releases"
             target="_blank"
             rel="noopener"
             >all releases ↗</a
           >
+        </div>
+        <div class="term" style="margin-top: 20px">
+          <div class="chrome">
+            <span class="dot r"></span><span class="dot y"></span
+            ><span class="dot g"></span>
+            <div class="titlebar">hodl — Arch Linux (AUR)</div>
+          </div>
+          <pre
+            style="
+              margin: 0;
+              padding: 14px 16px;
+              font-size: 13px;
+              line-height: 1.6;
+              overflow-x: auto;
+              color: var(--fg);
+              font-family: var(--mono);
+            "
+          ><span class="cm"># with paru / yay (or any AUR helper)</span>
+<span class="ok">$</span> paru -S hodl-bin
+<span class="ok">$</span> hodl</pre>
         </div>
         <div class="term" style="margin-top: 20px">
           <div class="chrome">
