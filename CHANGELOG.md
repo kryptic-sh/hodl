@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-05
+
 ### Fixed
 
 - **Send screen redraws on every loop iteration.** Form input felt laggy because
@@ -104,6 +106,17 @@ and this project adheres to
   a post-scan snapshot, not the partial accumulator.
 
 ### Added
+
+- **AUR auto-publish for `hodl-bin` on tag push.** Mirrors the working hjkl-bin
+  pipeline. New `pkg/aur/PKGBUILD-bin.in` template (no `depends=` — hodl is pure
+  terminal), shipped to the AUR repo alongside `LICENSE` and a `.gitignore` that
+  keeps the AUR working tree clean. Release matrix gains
+  `aarch64-unknown-linux-gnu` (zigbuild glibc 2.28) so the PKGBUILD can declare
+  both arches. New `aur-bin` job runs after the build matrix in
+  `archlinux:latest`, fetches the just-uploaded sha256 sidecars off the release,
+  renders the PKGBUILD, generates `.SRCINFO` via `makepkg` as a non-root builder
+  user, and pushes to `ssh://aur@aur.archlinux.org/hodl-bin.git`. No-op if the
+  AUR head already matches.
 
 - **Per-chain decimal precision.** New `ChainId::decimals() -> u32` method in
   `hodl-core` returns the chain's atomic-unit decimal count (8 for BTC family,
@@ -624,7 +637,8 @@ across every backend.
 
 - Workspace scaffold (M0): crates, CI lint/build/test on Linux.
 
-[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/kryptic-sh/hodl/releases/tag/v0.3.1
 [0.3.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.2.0
 [0.1.2]: https://github.com/kryptic-sh/hodl/releases/tag/v0.1.2
