@@ -161,11 +161,12 @@ impl BitcoinChain {
 
     /// Returns the default derivation purpose for this chain's send path.
     ///
-    /// - Bip44 (legacy P2PKH) for DOGE and BCH — segwit not deployed.
+    /// - Bip44 (legacy P2PKH) for DOGE, BCH, NAV — bech32/segwit not
+    ///   deployed in upstream node software.
     /// - Bip84 (native segwit P2WPKH) for everything else in the BTC family.
     pub fn default_send_purpose(chain_id: ChainId) -> Purpose {
         match chain_id {
-            ChainId::Dogecoin | ChainId::BitcoinCash => Purpose::Bip44,
+            ChainId::Dogecoin | ChainId::BitcoinCash | ChainId::NavCoin => Purpose::Bip44,
             _ => Purpose::Bip84,
         }
     }
@@ -862,7 +863,7 @@ mod chain_tests {
         );
         assert_eq!(
             BitcoinChain::default_send_purpose(ChainId::NavCoin),
-            Purpose::Bip84
+            Purpose::Bip44
         );
         assert_eq!(
             BitcoinChain::default_send_purpose(ChainId::Dogecoin),

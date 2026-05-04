@@ -41,15 +41,15 @@ fn path_str(purpose: u32, coin: u32, account: u32, change: u32, index: u32) -> S
 /// | Litecoin    | Bip44, 49, 84             | MWEB is post-v1; no taproot on LTC   |
 /// | Dogecoin    | Bip44 only                | bech32/segwit not deployed on DOGE   |
 /// | BitcoinCash | Bip44, 49 (→ CashAddr)    | BIP-84/86 not deployed on BCH        |
-/// | NavCoin     | Bip44, 49, 84             | segwit deployed; no taproot on NAV   |
+/// | NavCoin     | Bip44 only                | bech32/segwit not deployed in        |
+/// |             |                           | navcoin-core master/7.0.3            |
+/// |             |                           | (Bech32HRP() unimplemented)          |
 /// | others      | all (pass-through)        | Unknown derivative — no restriction  |
 fn validate_purpose(purpose: Purpose, params: &NetworkParams) -> Result<()> {
     let chain = params.chain_id;
     let ok = match chain {
-        ChainId::Litecoin | ChainId::NavCoin => {
-            matches!(purpose, Purpose::Bip44 | Purpose::Bip49 | Purpose::Bip84)
-        }
-        ChainId::Dogecoin => matches!(purpose, Purpose::Bip44),
+        ChainId::Litecoin => matches!(purpose, Purpose::Bip44 | Purpose::Bip49 | Purpose::Bip84),
+        ChainId::Dogecoin | ChainId::NavCoin => matches!(purpose, Purpose::Bip44),
         ChainId::BitcoinCash => matches!(purpose, Purpose::Bip44 | Purpose::Bip49),
         _ => true,
     };
@@ -360,37 +360,19 @@ mod tests {
         );
     }
 
-    /// NAV P2WPKH (BIP-84) — m/84'/130'/0'/0/0 must start with "nav1q".
+    /// NAV does not support BIP-49 / BIP-84 / BIP-86 — bech32/segwit is
+    /// unimplemented in navcoin-core (verified against 7.0.3 + master:
+    /// `CChainParams::Bech32HRP()` has no implementation).
     #[test]
-    fn navcoin_p2wpkh_prefix() {
+    fn navcoin_segwit_purposes_rejected() {
         let seed = seed_bytes();
-        let addr = derive_address(
-            &seed,
-            Purpose::Bip84,
-            &NetworkParams::NAVCOIN_MAINNET,
-            0,
-            0,
-            0,
-        )
-        .unwrap();
-        assert!(
-            addr.starts_with("nav1q"),
-            "NAV P2WPKH must start with 'nav1q', got {addr}"
-        );
-    }
-
-    /// NAV does not support BIP-86 (taproot not deployed on NavCoin).
-    #[test]
-    fn navcoin_bip86_rejected() {
-        let seed = seed_bytes();
-        let result = derive_address(
-            &seed,
-            Purpose::Bip86,
-            &NetworkParams::NAVCOIN_MAINNET,
-            0,
-            0,
-            0,
-        );
-        assert!(result.is_err(), "BIP-86 must be rejected on NAV");
+        for purpose in [Purpose::Bip49, Purpose::Bip84, Purpose::Bip86] {
+            let result = derive_address(&seed, purpose, &NetworkParams::NAVCOIN_MAINNET, 0, 0, 0);
+            assert!(
+                result.is_err(),
+                "BIP-{} must be rejected on NAV (segwit not deployed)",
+                purpose.number()
+            );
+        }
     }
 }

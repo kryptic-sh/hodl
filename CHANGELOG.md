@@ -42,6 +42,17 @@ and this project adheres to
 
 ### Fixed
 
+- **NavCoin generates legacy P2PKH (`N…`) addresses, not bech32.** The previous
+  default of Bip84 produced `nav1q…` addresses that were unspendable:
+  navcoin-core (verified against 7.0.3 and master 2026-05-04) has no
+  `Bech32HRP()` method on `CChainParams` and no `bech32_hrp` field —
+  bech32/segwit is unimplemented in upstream. `default_send_purpose(NavCoin)`
+  now returns `Bip44`; `validate_purpose` rejects Bip49/84/86 for NAV; the TUI
+  recipient validator accepts only legacy P2PKH base58check (`N…`) for NavCoin;
+  placeholder text changed from `nav1q…` to `N…`. Existing wallets that derived
+  `nav1q…` addresses should re-derive — no funds were ever spendable to those
+  addresses.
+
 - **Vault unlock no longer freezes the TUI** — argon2id KDF runs on a background
   thread; the lock screen shows a `decrypting… ⠋` spinner during the ~1–2 s wait
   instead of hanging with no feedback.

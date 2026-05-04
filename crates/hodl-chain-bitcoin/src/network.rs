@@ -77,19 +77,27 @@ impl NetworkParams {
         default_electrum_tls_port: 50002,
     };
 
-    /// NavCoin (NAV) mainnet. Bitcoin-derivative chain with native segwit.
+    /// NavCoin (NAV) mainnet. Bitcoin-derivative chain — legacy P2PKH + P2SH
+    /// only.
     ///
-    /// Standard P2PKH + bech32 P2WPKH; BIP-44/49/84 supported. BIP-86
-    /// (taproot) not deployed. NavCoin's blsCT-based xNAV shielded spends
-    /// are explicitly post-v1 — receive only via this path.
+    /// Bech32/segwit is **NOT deployed** in navcoin-core (verified against
+    /// 7.0.3 and master 2026-05-04: `CChainParams` has no `Bech32HRP()` and
+    /// no `bech32_hrp` field; the WitnessV0KeyHash encoder in `key_io.cpp`
+    /// references `m_params.Bech32HRP()` but the method has no
+    /// implementation in upstream chainparams.h). Only Bip44 (legacy P2PKH
+    /// with prefix 0x35 → "N…" addresses) is supported. NavCoin's blsCT-
+    /// based xNAV shielded spends are explicitly post-v1.
     ///
     /// Endpoints: Electrum-NavCoin servers (default ports 40001 / 40002 per
     /// upstream electrumx-NAV; verify on first integration).
     pub const NAVCOIN_MAINNET: Self = Self {
         chain_id: ChainId::NavCoin,
-        bech32_hrp: "nav",
+        // No bech32 in upstream — kept as empty for type compatibility, never
+        // produces a valid encoding because Bip84/86 are gated off in
+        // derive::validate_purpose.
+        bech32_hrp: "",
         p2pkh_prefix: 0x35, // "N" addresses
-        p2sh_prefix: 0x55,  // "X" addresses
+        p2sh_prefix: 0x55,  // "X" addresses (matches navcoin-core SCRIPT_ADDRESS = 85)
         default_electrum_port: 40001,
         default_electrum_tls_port: 40002,
     };

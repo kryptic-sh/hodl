@@ -91,7 +91,7 @@ pub fn validate_recipient(s: &str, chain: ChainId) -> std::result::Result<(), St
     }
     use ChainId::*;
     match chain {
-        Bitcoin | BitcoinTestnet | Litecoin | NavCoin => {
+        Bitcoin | BitcoinTestnet | Litecoin => {
             // Try bech32 first (the wallet's preferred default).
             if let Ok((_, ver, prog)) = bech32::segwit::decode(s)
                 && ver == bech32::segwit::VERSION_0
@@ -102,7 +102,9 @@ pub fn validate_recipient(s: &str, chain: ChainId) -> std::result::Result<(), St
             // Fall back to legacy base58check P2PKH.
             validate_base58_p2pkh(s)
         }
-        Dogecoin => validate_base58_p2pkh(s),
+        // NavCoin and Dogecoin: legacy P2PKH only — bech32/segwit not
+        // deployed in upstream node software.
+        Dogecoin | NavCoin => validate_base58_p2pkh(s),
         BitcoinCash => {
             if !s.starts_with("bitcoincash:") {
                 return Err("BCH recipient must be CashAddr (bitcoincash:q…)".into());
@@ -554,7 +556,7 @@ fn recipient_placeholder(chain: ChainId) -> &'static str {
         Litecoin => "ltc1q…",
         Dogecoin => "D…",
         BitcoinCash => "bitcoincash:q…",
-        NavCoin => "nav1q…",
+        NavCoin => "N…",
         Ethereum | BscMainnet => "0x…",
         Monero => "4…",
     }
