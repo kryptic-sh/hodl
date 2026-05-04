@@ -109,6 +109,53 @@ fn purpose_script(purpose: Purpose, pubkey_hash: &[u8; 20]) -> Vec<u8> {
     }
 }
 
+/// Confirmed-vs-pending balance in atoms (sats).
+///
+/// "Confirmed" = at least 1 block confirmation (Electrum's `confirmed` field).
+/// "Pending" = mempool only (Electrum's `unconfirmed` field — can be negative
+/// when an incoming unconfirmed output is subsequently spent in the mempool,
+/// so we clamp to 0).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BalanceSplit {
+    pub confirmed: u64,
+    pub pending: u64,
+}
+
+impl BalanceSplit {
+    pub fn total(self) -> u64 {
+        self.confirmed + self.pending
+    }
+
+    pub fn is_zero(self) -> bool {
+        self.confirmed == 0 && self.pending == 0
+    }
+}
+
+/// One used address discovered during a gap-limit wallet scan.
+#[derive(Debug, Clone)]
+pub struct UsedAddress {
+    pub index: u32,
+    /// 0 = receive (external) chain, 1 = change (internal) chain — BIP-44 path component.
+    pub change: u32,
+    pub address: String,
+    pub balance: BalanceSplit,
+}
+
+/// Result of a gap-limit wallet scan.
+#[derive(Debug, Clone, Default)]
+pub struct WalletScan {
+    /// All addresses with history > 0 OR balance > 0, across both receive and
+    /// change chains. Order: receive first (sorted by index), then change
+    /// (sorted by index).
+    pub used: Vec<UsedAddress>,
+    /// Aggregate balance across all used addresses.
+    pub total: BalanceSplit,
+    /// Highest derivation index reached on each chain (how far the scan walked
+    /// before hitting `gap_limit` consecutive unused). For diagnostics.
+    pub highest_index_receive: u32,
+    pub highest_index_change: u32,
+}
+
 /// BIP-125 RBF sequence value — signals opt-in replace-by-fee.
 pub const SEQUENCE_RBF: u32 = 0xffff_fffd;
 
@@ -593,6 +640,89 @@ impl BitcoinChain {
             raw: signed_bytes,
         })
     }
+
+    /// Walk both receive (change=0) and change (change=1) chains, deriving
+    /// each address, querying its history length and balance. Stops walking
+    /// each chain when `gap_limit` consecutive addresses with no history are
+    /// seen. Returns only addresses with history > 0 OR balance > 0.
+    ///
+    /// Default gap_limit per BIP-44 spec = 20 (matches Electrum/Trezor/Ledger).
+    /// Caller passes the value from `chain_cfg.gap_limit`.
+    ///
+    /// This is a blocking operation — caller should run it on a background
+    /// thread.
+    pub fn scan_used_addresses(
+        &self,
+        seed: &[u8; 64],
+        account: u32,
+        gap_limit: u32,
+    ) -> Result<WalletScan> {
+        let mut scan = WalletScan::default();
+
+        for change in [0u32, 1u32] {
+            let mut consecutive_unused = 0u32;
+            let mut index = 0u32;
+
+            loop {
+                let addr_str = crate::derive::derive_address(
+                    seed,
+                    self.purpose,
+                    &self.params,
+                    account,
+                    change,
+                    index,
+                )?;
+                let addr = hodl_core::Address::new(addr_str.clone(), self.params.chain_id);
+                let scripthash = self.scripthash_for(&addr)?;
+
+                let count = self.electrum.borrow_mut().get_history_count(&scripthash)?;
+
+                if count == 0 {
+                    consecutive_unused += 1;
+                    if consecutive_unused >= gap_limit {
+                        // Record highest index reached (last checked index before break).
+                        if change == 0 {
+                            scan.highest_index_receive = index;
+                        } else {
+                            scan.highest_index_change = index;
+                        }
+                        break;
+                    }
+                } else {
+                    consecutive_unused = 0;
+
+                    // Fetch balance for used address.
+                    let raw = self
+                        .electrum
+                        .borrow_mut()
+                        .scripthash_get_balance(&scripthash)?;
+                    let pending = if raw.unconfirmed < 0 {
+                        0u64
+                    } else {
+                        raw.unconfirmed as u64
+                    };
+                    let balance = BalanceSplit {
+                        confirmed: raw.confirmed,
+                        pending,
+                    };
+
+                    scan.total.confirmed += balance.confirmed;
+                    scan.total.pending += balance.pending;
+
+                    scan.used.push(UsedAddress {
+                        index,
+                        change,
+                        address: addr_str,
+                        balance,
+                    });
+                }
+
+                index += 1;
+            }
+        }
+
+        Ok(scan)
+    }
 }
 
 impl Chain for BitcoinChain {
@@ -921,6 +1051,102 @@ mod chain_tests {
         assert!(
             result.is_err(),
             "ecash:-prefixed address must be rejected on BCH chain"
+        );
+    }
+
+    // ── WalletScan / BalanceSplit unit-shape tests ──────────────────────────
+
+    /// `BalanceSplit::total` adds confirmed + pending.
+    #[test]
+    fn balance_split_total() {
+        let b = BalanceSplit {
+            confirmed: 1_000,
+            pending: 500,
+        };
+        assert_eq!(b.total(), 1_500);
+    }
+
+    /// `BalanceSplit::is_zero` returns true only when both fields are 0.
+    #[test]
+    fn balance_split_is_zero() {
+        assert!(BalanceSplit::default().is_zero());
+        assert!(
+            !BalanceSplit {
+                confirmed: 1,
+                pending: 0
+            }
+            .is_zero()
+        );
+        assert!(
+            !BalanceSplit {
+                confirmed: 0,
+                pending: 1
+            }
+            .is_zero()
+        );
+        assert!(
+            !BalanceSplit {
+                confirmed: 1,
+                pending: 1
+            }
+            .is_zero()
+        );
+    }
+
+    /// `WalletScan::default()` is empty.
+    #[test]
+    fn wallet_scan_default_is_empty() {
+        let scan = WalletScan::default();
+        assert!(scan.used.is_empty());
+        assert!(scan.total.is_zero());
+        assert_eq!(scan.highest_index_receive, 0);
+        assert_eq!(scan.highest_index_change, 0);
+    }
+
+    // ── No mock-based test for scan_used_addresses ──────────────────────────
+    //
+    // `ElectrumClient` does not expose a trait abstraction over the transport
+    // at the level of individual RPC calls — the mock in electrum.rs operates
+    // at the raw TCP stream level (queue of newline-delimited JSON lines).
+    // Wiring a multi-call sequence (get_history + get_balance per address,
+    // across two chains, for a realistic gap-limit walk) would require a
+    // stateful queue-based MockTransport with ~200 lines of scaffolding for
+    // marginal coverage gain over what the unit-shape tests above plus the
+    // electrum.rs protocol tests already provide.  The integration test below
+    // covers the real end-to-end path instead.
+
+    /// Integration smoke-test: scan the standard "abandon × 11 + about"
+    /// BIP-39 test seed against a live Electrum mainnet server.  The seed is
+    /// well-known (published in BIP-39 / hardware-wallet docs) so its wallets
+    /// are intentionally empty on mainnet.  Expected result: `used` is empty
+    /// and `total.total() == 0`.
+    ///
+    /// Ignored by default — unignore manually to verify real-network behaviour.
+    #[test]
+    #[ignore = "hits real Electrum server"]
+    fn scan_used_addresses_empty_seed_mainnet() {
+        use crate::electrum::ElectrumClient;
+        use crate::network::NetworkParams;
+
+        // "abandon" × 11 + "about", no passphrase — standard BIP-39 test seed.
+        let seed_hex = "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4";
+        let seed_bytes: Vec<u8> = hex::decode(seed_hex).unwrap();
+        let seed: [u8; 64] = seed_bytes.try_into().unwrap();
+
+        let electrum = ElectrumClient::connect_tls("electrum.blockstream.info", 50002).unwrap();
+        let chain = BitcoinChain::new(NetworkParams::BITCOIN_MAINNET, electrum);
+
+        let scan = chain.scan_used_addresses(&seed, 0, 20).unwrap();
+
+        assert!(
+            scan.used.is_empty(),
+            "well-known empty test seed must have no used addresses; got: {:?}",
+            scan.used
+        );
+        assert_eq!(
+            scan.total.total(),
+            0,
+            "well-known empty test seed must have zero total balance"
         );
     }
 }

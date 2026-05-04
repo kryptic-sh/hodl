@@ -8,6 +8,26 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **`hodl-chain-bitcoin`: wallet-scan data layer with BIP-44 gap-limit walker.**
+  New public API in `hodl-chain-bitcoin`:
+  - `BalanceSplit` — confirmed/pending balance pair in sats with `total()` and
+    `is_zero()` helpers.
+  - `UsedAddress` — a single address discovered during a gap-limit scan (index,
+    change chain, address string, `BalanceSplit`).
+  - `WalletScan` — result of a full two-chain scan: `used: Vec<UsedAddress>`,
+    `total: BalanceSplit`, and per-chain highest-index diagnostics.
+  - `BitcoinChain::scan_used_addresses(seed, account, gap_limit)` — walks both
+    the receive (change=0) and change (change=1) chains, querying Electrum for
+    history count and balance at each derived address, stopping each chain after
+    `gap_limit` consecutive unused addresses. Returns `WalletScan`.
+  - `ElectrumClient::get_history_count(scripthash)` — thin wrapper over
+    `scripthash_get_history` returning just the entry count; used by the scanner
+    to avoid allocating the full history vector per address.
+  - `ElectrumClient::new_unconnected()` — panicking null-transport client for
+    derivation-only use-cases (no Electrum dial).
+
 ### Changed
 
 - **Endpoint selection is randomised with automatic fail-over.**
