@@ -22,12 +22,16 @@ and this project adheres to
 
 - Curated default Electrum endpoint list ships in `Config::default()` for every
   BTC-family chain (BTC mainnet + testnet, BCH, LTC, DOGE, NAV). Five TLS-only
-  servers per chain where available; one for NAV (only public server alive).
-  Sourced from the `1209k.com/bitcoin-eye` reliability monitor on 2026-05-04.
-  The wallet still does not phone home on its own — endpoints are only contacted
-  when the user opens accounts / receive / send. EVM (ETH/BSC) and Monero remain
-  endpoint-empty by default: EVM needs a per-user API key and Monero LWS leaks
-  the view key to the operator (privacy-conservative default = self-host).
+  servers per chain. Sourced from the `1209k.com/bitcoin-eye` reliability
+  monitor on 2026-05-04 (NavCoin servers from upstream). The wallet still does
+  not phone home on its own — endpoints are only contacted when the user opens
+  accounts / receive / send. EVM (ETH/BSC) and Monero remain endpoint-empty by
+  default: EVM needs a per-user API key and Monero LWS leaks the view key to the
+  operator (privacy-conservative default = self-host).
+- `Config::load` now merges user `[chains.X]` overrides **per chain key** over
+  the curated defaults: writing your own `[chains.bitcoin]` only replaces BTC,
+  every other chain keeps its default endpoint list. Closes a footgun where a
+  bare-bones user config silently dropped every default it didn't restate.
 
 ### Removed
 

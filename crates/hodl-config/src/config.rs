@@ -19,12 +19,21 @@ pub enum Endpoint {
 }
 
 /// Per-chain configuration.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChainConfig {
     #[serde(default)]
     pub endpoints: Vec<Endpoint>,
     #[serde(default = "default_gap_limit")]
     pub gap_limit: u32,
+}
+
+impl Default for ChainConfig {
+    fn default() -> Self {
+        ChainConfig {
+            endpoints: Vec::new(),
+            gap_limit: default_gap_limit(),
+        }
+    }
 }
 
 fn default_gap_limit() -> u32 {
@@ -86,6 +95,17 @@ pub enum KdfPreset {
 /// EVM (ETH/BSC) and Monero have no built-in defaults: EVM JSON-RPC needs
 /// per-user API keys (Infura/Alchemy/etc.), and Monero LWS leaks the view
 /// key to the operator so the privacy-conservative default is "self-host".
+///
+/// ## Override semantics
+///
+/// User overrides are **per-chain key**, not per-endpoint. If the user's
+/// `config.toml` is missing a `[chains.X]` block for some chain `X`, the
+/// curated default endpoint list for `X` is used. If the user provides a
+/// `[chains.X]` block — even an empty one — it fully replaces the default
+/// for that chain. Other chains keep their defaults independently.
+///
+/// Example: writing only `[chains.bitcoin] endpoints = [...]` keeps DOGE,
+/// LTC, BCH, NAV, and BTC-testnet on their defaults; only BTC is replaced.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -201,6 +221,12 @@ impl Config {
 
     /// Load config from `path`. Returns `Config::default()` if the file does
     /// not exist. Never writes to disk.
+    ///
+    /// User overrides merge **per chain key** over the curated defaults: any
+    /// `[chains.X]` block the user provides fully replaces the default for
+    /// that chain, but other chains keep their defaults. Top-level fields
+    /// (`tor`, `lock`, `kdf`) work normally — present overrides default,
+    /// absent uses the default value.
     pub fn load(path: &Path) -> Result<Config, ConfigError> {
         if !path.exists() {
             return Ok(Config::default());
@@ -209,7 +235,7 @@ impl Config {
             path: path.to_path_buf(),
             source: e,
         })?;
-        toml::from_str::<Config>(&src).map_err(|e| {
+        let mut user: Config = toml::from_str(&src).map_err(|e| {
             let span = e.span().unwrap_or(0..0);
             let (line, col, snippet) = locate(&src, span.start);
             ConfigError::Parse {
@@ -219,7 +245,14 @@ impl Config {
                 message: e.message().to_string(),
                 snippet,
             }
-        })
+        })?;
+        // Per-chain merge: any chain the user did NOT override gets its
+        // curated default. Chains the user did override keep the user's
+        // value, untouched.
+        for (chain, default_cc) in default_chains() {
+            user.chains.entry(chain).or_insert(default_cc);
+        }
+        Ok(user)
     }
 }
 
@@ -294,6 +327,55 @@ mod tests {
             !cfg.chains.contains_key(&ChainId::Monero),
             "Monero must not have a default LWS endpoint (privacy)"
         );
+    }
+
+    #[test]
+    fn user_override_merges_per_chain() {
+        // User overrides only Bitcoin. All other BTC-family defaults must
+        // survive the merge intact.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[chains.bitcoin]
+gap_limit = 50
+
+[[chains.bitcoin.endpoints]]
+kind = "electrum"
+url = "ssl://my-private-electrum.example:50002"
+tls = true
+"#,
+        )
+        .unwrap();
+
+        let cfg = Config::load(&path).expect("load");
+
+        // Bitcoin: user's value wins entirely.
+        let btc = cfg.chains.get(&ChainId::Bitcoin).expect("btc");
+        assert_eq!(btc.gap_limit, 50);
+        assert_eq!(btc.endpoints.len(), 1);
+        match &btc.endpoints[0] {
+            Endpoint::Electrum { url, .. } => {
+                assert!(url.contains("my-private-electrum.example"));
+            }
+            other => panic!("expected user's electrum endpoint, got {other:?}"),
+        }
+
+        // Other BTC-family chains: defaults preserved.
+        for chain in [
+            ChainId::BitcoinTestnet,
+            ChainId::Litecoin,
+            ChainId::BitcoinCash,
+            ChainId::Dogecoin,
+            ChainId::NavCoin,
+        ] {
+            let cc = cfg.chains.get(&chain).expect("default preserved");
+            assert!(
+                !cc.endpoints.is_empty(),
+                "{chain:?} default endpoints lost during merge"
+            );
+        }
     }
 
     #[test]
