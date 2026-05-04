@@ -823,16 +823,19 @@ where
     let mut help_overlay: Option<HelpOverlay> = None;
 
     loop {
-        // Poll in-flight channels; redraw if phase changed.
-        let changed = state.poll();
-        if changed {
-            terminal.draw(|f| {
-                draw(f, state);
-                if let Some(ref mut overlay) = help_overlay {
-                    overlay.draw(f, f.area());
-                }
-            })?;
-        }
+        // Drain in-flight channel events first so phase/spinner state is
+        // current before we render.
+        state.poll();
+
+        // Single render per iteration — covers both the timeout (spinner
+        // animation) and post-event (form echo) paths uniformly.
+        terminal.draw(|f| {
+            let area = f.area();
+            draw(f, state);
+            if let Some(ref mut overlay) = help_overlay {
+                overlay.draw(f, area);
+            }
+        })?;
 
         // Short timeout while busy so spinner animates; idle otherwise.
         let wait = if state.is_busy() {
@@ -842,13 +845,6 @@ where
         };
 
         if !event::poll(wait)? {
-            terminal.draw(|f| {
-                let area = f.area();
-                draw(f, state);
-                if let Some(ref mut overlay) = help_overlay {
-                    overlay.draw(f, area);
-                }
-            })?;
             continue;
         }
 
