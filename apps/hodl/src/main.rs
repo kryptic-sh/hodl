@@ -73,7 +73,15 @@ fn main() -> Result<()> {
     }) {
         Cmd::Init { name } => hodl_tui::run_create(data_root, name),
         Cmd::Restore { name } => hodl_tui::run_restore(data_root, name),
-        Cmd::Unlock { name } => hodl_tui::run(data_root, name),
+        Cmd::Unlock { name } => {
+            // First-run convenience: bare `hodl` with no vault routes to
+            // onboarding instead of failing with "vault not found".
+            if !storage::vault_path(&data_root, &name).exists() {
+                hodl_tui::run_create(data_root, name)
+            } else {
+                hodl_tui::run(data_root, name)
+            }
+        }
     }
 }
 
