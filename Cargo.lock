@@ -1138,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "hodl"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "hodl-chain-bitcoin"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bech32",
  "bip32",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "hodl-chain-ethereum"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bip32",
  "hex",
@@ -1190,7 +1190,7 @@ dependencies = [
 
 [[package]]
 name = "hodl-chain-monero"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base58-monero",
  "bip32",
@@ -1209,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "hodl-config"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hjkl-config",
  "hodl-core",
@@ -1221,7 +1221,7 @@ dependencies = [
 
 [[package]]
 name = "hodl-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -1230,7 +1230,7 @@ dependencies = [
 
 [[package]]
 name = "hodl-tui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bech32",
@@ -1253,7 +1253,7 @@ dependencies = [
 
 [[package]]
 name = "hodl-wallet"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "argon2",
  "bip32",
@@ -3524,7 +3524,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",

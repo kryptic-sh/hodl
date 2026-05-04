@@ -8,6 +8,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-04
+
+Chain enum reshape + curated default Electrum endpoints. Two breaking changes
+(`ChainId::Navio` → `NavCoin`, drop BSV + XEC) plus the first shipped server
+list — wallet now works out of the box for the BTC family without a hand-written
+`config.toml`.
+
 ### Changed
 
 - **BREAKING:** rename `ChainId::Navio` → `ChainId::NavCoin` (ticker `NAV`,
@@ -250,7 +257,8 @@ across every backend.
 
 - Workspace scaffold (M0): crates, CI lint/build/test on Linux.
 
-[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.2.0
 [0.1.2]: https://github.com/kryptic-sh/hodl/releases/tag/v0.1.2
 [0.1.1]: https://github.com/kryptic-sh/hodl/releases/tag/v0.1.1
