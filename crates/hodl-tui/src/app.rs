@@ -28,9 +28,16 @@ use crate::receive::{self, ReceiveAction, ReceiveState};
 use crate::scan_cache::ScanCache;
 use crate::send::{self, SendAction, SendState};
 use crate::settings::{self, SettingsAction, SettingsState};
+use crate::tofu_overlay::{TofuAction, TofuOverlay};
 
 /// Fallback idle timeout when the config cannot be loaded.
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// Which screen triggered the TOFU mismatch (used to decide how to respawn
+/// the scan after the user trusts the new cert).
+enum TofuOrigin {
+    Scan,
+}
 
 // Box large variants to keep the enum footprint smaller.
 #[allow(clippy::large_enum_variant)]
@@ -64,6 +71,10 @@ pub struct App {
     clipboard: ClipboardHandle,
     /// Contextual help overlay; drawn on top of the active screen when `Some`.
     help_overlay: Option<HelpOverlay>,
+    /// TOFU remediation overlay; drawn on top of the active screen when `Some`.
+    /// Tuple of (overlay widget, origin screen) so we know what to respawn
+    /// after the user trusts the new cert.
+    tofu_overlay: Option<(TofuOverlay, TofuOrigin)>,
     /// TOFU cert pin store shared across all scan and send threads.
     known_hosts: Arc<Mutex<KnownHosts>>,
     /// Encrypted, per-wallet on-disk cache of `WalletScan` per chain.
@@ -90,6 +101,7 @@ impl App {
             last_activity: Instant::now(),
             clipboard,
             help_overlay: None,
+            tofu_overlay: None,
             known_hosts,
             scan_cache: None,
         })
@@ -111,6 +123,7 @@ impl App {
             last_activity: Instant::now(),
             clipboard,
             help_overlay: None,
+            tofu_overlay: None,
             known_hosts,
             scan_cache: None,
         })
@@ -133,6 +146,7 @@ impl App {
             last_activity: Instant::now(),
             clipboard,
             help_overlay: None,
+            tofu_overlay: None,
             known_hosts,
             scan_cache: None,
         })
@@ -158,6 +172,7 @@ impl App {
             last_activity: Instant::now(),
             clipboard,
             help_overlay: None,
+            tofu_overlay: None,
             known_hosts,
             scan_cache: None,
         })
@@ -259,10 +274,24 @@ impl App {
                         {
                             cache.put(s.current_chain, scan);
                         }
+                        // If a TOFU mismatch was detected, open the remediation
+                        // overlay. The AccountState has already cleared pending_scan
+                        // and set scan_error to the short prompt string.
+                        if let Some(info) = s.tofu_mismatch.take() {
+                            self.tofu_overlay = Some((
+                                TofuOverlay::new(info.host, info.pinned, info.presented),
+                                TofuOrigin::Scan,
+                            ));
+                        }
                         // State changed (rows arrived or error) — redraw.
                         terminal.draw(|f| {
                             let area = f.area();
-                            account::draw(f, area, s);
+                            if let Screen::Accounts(s) = &mut self.screen {
+                                account::draw(f, area, s);
+                            }
+                            if let Some((ref overlay, _)) = self.tofu_overlay {
+                                overlay.draw(f, f.area());
+                            }
                         })?;
                         continue;
                     }
@@ -285,6 +314,9 @@ impl App {
                             if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
                             }
+                            if let Some((ref overlay, _)) = self.tofu_overlay {
+                                overlay.draw(f, area);
+                            }
                         })?;
                         continue;
                     }
@@ -296,7 +328,63 @@ impl App {
                         self.last_activity = Instant::now();
                     }
 
-                    // Overlay absorbs all keys when open.
+                    // TOFU overlay absorbs all keys first (higher priority than help).
+                    if self.tofu_overlay.is_some() {
+                        if let Event::Key(k) = ev
+                            && k.kind == KeyEventKind::Press
+                        {
+                            let action = self
+                                .tofu_overlay
+                                .as_mut()
+                                .map(|(o, _)| o.handle_key(k))
+                                .unwrap_or(TofuAction::None);
+                            match action {
+                                TofuAction::TrustNew => {
+                                    if let Some((ref ov, _)) = self.tofu_overlay {
+                                        let host = ov.host().to_string();
+                                        let presented = ov.presented().to_string();
+                                        self.apply_trust_new(host, presented);
+                                    }
+                                    self.tofu_overlay = None;
+                                    // Respawn the scan with the updated pin.
+                                    if let Screen::Accounts(s) = &mut self.screen
+                                        && let Some(unlocked) = &self.unlocked
+                                    {
+                                        let cached = self
+                                            .scan_cache
+                                            .as_ref()
+                                            .and_then(|c| c.get(s.current_chain));
+                                        s.start_load(unlocked, cached);
+                                    }
+                                }
+                                TofuAction::StayPinned => {
+                                    self.tofu_overlay = None;
+                                    if let Screen::Accounts(s) = &mut self.screen {
+                                        s.flash = Some(
+                                            "Pin retained — endpoint refused. Investigate before retrying."
+                                                .into(),
+                                        );
+                                    }
+                                }
+                                TofuAction::Abort => {
+                                    self.tofu_overlay = None;
+                                }
+                                TofuAction::Nav | TofuAction::None => {}
+                            }
+                        }
+                        terminal.draw(|f| {
+                            let area = f.area();
+                            if let Screen::Accounts(s) = &mut self.screen {
+                                account::draw(f, area, s);
+                            }
+                            if let Some((ref overlay, _)) = self.tofu_overlay {
+                                overlay.draw(f, area);
+                            }
+                        })?;
+                        continue;
+                    }
+
+                    // Help overlay absorbs all keys when open.
                     if let Some(ref mut overlay) = self.help_overlay {
                         if let Event::Key(k) = ev
                             && k.kind == KeyEventKind::Press
@@ -537,6 +625,19 @@ impl App {
                         {
                             cache.put(accounts.current_chain, scan);
                         }
+                        // Lift any TOFU mismatch from the embedded AccountState.
+                        let tofu_info = if let Screen::Addresses { accounts, .. } = &mut self.screen
+                        {
+                            accounts.tofu_mismatch.take()
+                        } else {
+                            None
+                        };
+                        if let Some(info) = tofu_info {
+                            self.tofu_overlay = Some((
+                                TofuOverlay::new(info.host, info.pinned, info.presented),
+                                TofuOrigin::Scan,
+                            ));
+                        }
                         terminal.draw(|f| {
                             let area = f.area();
                             if let Screen::Addresses {
@@ -550,6 +651,9 @@ impl App {
                             }
                             if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
+                            }
+                            if let Some((ref overlay, _)) = self.tofu_overlay {
+                                overlay.draw(f, f.area());
                             }
                         })?;
                         continue;
@@ -579,6 +683,9 @@ impl App {
                             if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
                             }
+                            if let Some((ref overlay, _)) = self.tofu_overlay {
+                                overlay.draw(f, area);
+                            }
                         })?;
                         continue;
                     }
@@ -590,7 +697,69 @@ impl App {
                         self.last_activity = Instant::now();
                     }
 
-                    // Overlay absorbs all keys when open.
+                    // TOFU overlay absorbs all keys first.
+                    if self.tofu_overlay.is_some() {
+                        if let Event::Key(k) = ev
+                            && k.kind == KeyEventKind::Press
+                        {
+                            let action = self
+                                .tofu_overlay
+                                .as_mut()
+                                .map(|(o, _)| o.handle_key(k))
+                                .unwrap_or(TofuAction::None);
+                            match action {
+                                TofuAction::TrustNew => {
+                                    if let Some((ref ov, _)) = self.tofu_overlay {
+                                        let host = ov.host().to_string();
+                                        let presented = ov.presented().to_string();
+                                        self.apply_trust_new(host, presented);
+                                    }
+                                    self.tofu_overlay = None;
+                                    // Respawn the scan on the embedded AccountState.
+                                    if let (Screen::Addresses { accounts, .. }, Some(unlocked)) =
+                                        (&mut self.screen, &self.unlocked)
+                                    {
+                                        let cached = self
+                                            .scan_cache
+                                            .as_ref()
+                                            .and_then(|c| c.get(accounts.current_chain));
+                                        accounts.start_load(unlocked, cached);
+                                    }
+                                }
+                                TofuAction::StayPinned => {
+                                    self.tofu_overlay = None;
+                                    if let Screen::Addresses { accounts, .. } = &mut self.screen {
+                                        accounts.flash = Some(
+                                            "Pin retained — endpoint refused. Investigate before retrying."
+                                                .into(),
+                                        );
+                                    }
+                                }
+                                TofuAction::Abort => {
+                                    self.tofu_overlay = None;
+                                }
+                                TofuAction::Nav | TofuAction::None => {}
+                            }
+                        }
+                        terminal.draw(|f| {
+                            let area = f.area();
+                            if let Screen::Addresses {
+                                addresses,
+                                accounts,
+                                ..
+                            } = &mut self.screen
+                            {
+                                let scanning = accounts.is_scanning();
+                                addresses::draw(f, area, addresses, accounts.live_scan(), scanning);
+                            }
+                            if let Some((ref overlay, _)) = self.tofu_overlay {
+                                overlay.draw(f, f.area());
+                            }
+                        })?;
+                        continue;
+                    }
+
+                    // Help overlay absorbs all keys when open.
                     if let Some(ref mut overlay) = self.help_overlay {
                         if let Event::Key(k) = ev
                             && k.kind == KeyEventKind::Press
@@ -851,6 +1020,22 @@ impl App {
         self.screen = Screen::Lock;
         self.last_activity = Instant::now();
         self.help_overlay = None;
+        self.tofu_overlay = None;
+    }
+
+    /// Persist the new fingerprint for `host` into the shared `KnownHosts`
+    /// store and atomically save to disk.
+    ///
+    /// Uses poison-recovery on the mutex — never panics.
+    fn apply_trust_new(&mut self, host: String, fingerprint: String) {
+        let mut kh = match self.known_hosts.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        kh.insert(host.clone(), fingerprint);
+        if let Err(e) = kh.save(&self.data_root) {
+            tracing::warn!("save known_hosts after Trust new for {host}: {e}");
+        }
     }
 }
 

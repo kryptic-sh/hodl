@@ -19,6 +19,7 @@ pub mod retry;
 pub mod scan_cache;
 pub mod send;
 pub mod settings;
+pub mod tofu_overlay;
 
 use std::path::PathBuf;
 use std::time::Duration;

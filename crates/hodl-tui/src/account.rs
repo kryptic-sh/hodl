@@ -52,6 +52,7 @@ use hodl_wallet::UnlockedWallet;
 
 use crate::active_chain::ActiveChain;
 use crate::format;
+use crate::tofu_overlay::TofuMismatchInfo;
 
 /// Events sent from the scan worker thread to the UI.
 enum ScanEvent {
@@ -67,6 +68,14 @@ enum ScanEvent {
     /// underlying reason via `tracing::debug!`; the UI surfaces only the
     /// attempt count in the status line.
     Reset { attempt: u32 },
+    /// TOFU fingerprint mismatch detected. The UI should surface the
+    /// remediation overlay. No retry will occur; the worker exits after
+    /// sending this event.
+    TofuMismatch {
+        host: String,
+        pinned: String,
+        presented: String,
+    },
 }
 
 use crate::retry::{self, AttemptResult, MAX_ATTEMPTS as MAX_SCAN_ATTEMPTS};
@@ -129,7 +138,9 @@ pub struct AccountState {
     /// Ordered chain list parallel to the open picker; used to resolve
     /// `PickerAction::SwitchSlot(idx)` back to a `ChainId`.
     picker_chains: Vec<ChainId>,
-    flash: Option<String>,
+    /// Flash message shown in the status/hint bar. Settable by the App layer
+    /// (e.g. after a TOFU StayPinned action).
+    pub flash: Option<String>,
     config: Config,
     /// Currently-selected chain. Defaults to Bitcoin; updated by the picker.
     pub current_chain: ChainId,
@@ -137,6 +148,9 @@ pub struct AccountState {
     known_hosts: Arc<Mutex<KnownHosts>>,
     /// Root directory for data files (known_hosts.toml, etc.).
     data_root: PathBuf,
+    /// Set when a scan worker sends `ScanEvent::TofuMismatch`. The App layer
+    /// reads and clears this on each poll cycle to open the remediation overlay.
+    pub tofu_mismatch: Option<TofuMismatchInfo>,
 }
 
 impl AccountState {
@@ -155,6 +169,7 @@ impl AccountState {
             current_chain: ChainId::Bitcoin,
             known_hosts,
             data_root,
+            tofu_mismatch: None,
         }
     }
 
@@ -203,6 +218,21 @@ impl AccountState {
                 Ok(ScanEvent::Error(msg)) => {
                     self.scan_error = Some(msg);
                     self.scan = None;
+                    self.partial_scan = WalletScan::default();
+                    self.pending_scan = None;
+                    return true;
+                }
+                Ok(ScanEvent::TofuMismatch {
+                    host,
+                    pinned,
+                    presented,
+                }) => {
+                    self.tofu_mismatch = Some(TofuMismatchInfo {
+                        host,
+                        pinned,
+                        presented,
+                    });
+                    self.scan_error = Some("TOFU mismatch — review trust prompt".into());
                     self.partial_scan = WalletScan::default();
                     self.pending_scan = None;
                     return true;
@@ -495,6 +525,21 @@ fn scan_thread_streaming(
             AttemptResult::Done => return,
             AttemptResult::Fatal(msg) => {
                 let _ = tx.send(ScanEvent::Error(msg));
+                return;
+            }
+            AttemptResult::TofuMismatch {
+                host,
+                pinned,
+                presented,
+            } => {
+                // Security signal — surface the remediation overlay via a
+                // dedicated event rather than a plain error string. The seed
+                // is zeroized by the caller (the spawned thread) on return.
+                let _ = tx.send(ScanEvent::TofuMismatch {
+                    host,
+                    pinned,
+                    presented,
+                });
                 return;
             }
             AttemptResult::Retry(reason) => {
@@ -890,5 +935,58 @@ impl PickerLogic for ChainPickerSource {
         _cancel: Arc<AtomicBool>,
     ) -> Option<JoinHandle<()>> {
         None
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::*;
+
+    fn make_state() -> AccountState {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        AccountState::new(
+            tmp.path().to_path_buf(),
+            Config::default(),
+            Arc::new(Mutex::new(KnownHosts::default())),
+        )
+    }
+
+    #[test]
+    fn poll_scan_sets_tofu_mismatch_and_clears_pending() {
+        let mut state = make_state();
+        let (tx, rx) = mpsc::channel();
+        state.pending_scan = Some(rx);
+
+        tx.send(ScanEvent::TofuMismatch {
+            host: "electrum.example.com:50002".into(),
+            pinned: "aabbcc".into(),
+            presented: "112233".into(),
+        })
+        .unwrap();
+        drop(tx);
+
+        let changed = state.poll_scan();
+        assert!(changed, "poll_scan should return true on TofuMismatch");
+        assert!(
+            state.tofu_mismatch.is_some(),
+            "tofu_mismatch must be set after TofuMismatch event"
+        );
+        assert!(
+            state.pending_scan.is_none(),
+            "pending_scan must be cleared after TofuMismatch event"
+        );
+        assert!(
+            state.scan_error.is_some(),
+            "scan_error should be set to the short prompt string"
+        );
+        let info = state.tofu_mismatch.as_ref().unwrap();
+        assert_eq!(info.host, "electrum.example.com:50002");
+        assert_eq!(info.pinned, "aabbcc");
+        assert_eq!(info.presented, "112233");
     }
 }

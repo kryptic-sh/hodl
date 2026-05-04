@@ -25,15 +25,22 @@ pub enum AttemptResult {
     Fatal(String),
     /// Retryable error (network/IO). Outer loop should reconnect and retry.
     Retry(String),
+    /// TOFU cert mismatch — not retryable, but distinct from Fatal so the
+    /// caller can surface an interactive remediation prompt instead of a
+    /// plain error message. Carries the host and both fingerprints.
+    TofuMismatch {
+        host: String,
+        pinned: String,
+        presented: String,
+    },
 }
 
 /// Map a `hodl_core::Error` to an [`AttemptResult`] via its retry-ability.
 ///
 /// Classification rules:
-/// - `TofuMismatch` → **always fatal** — security signal; retrying would hide
-///   a cert-change and potentially connect to a different clean server,
-///   masking the mismatch. The user must manually remove the stale entry from
-///   `known_hosts.toml`.
+/// - `TofuMismatch` → `AttemptResult::TofuMismatch` — security signal; the
+///   caller surfaces an interactive remediation overlay instead of a plain
+///   error. Retrying would hide a cert-change, so it is never retried.
 /// - `Network` / `Io` / `Endpoint` → retryable (transient connectivity issues).
 /// - `Codec` / `Chain` / `Config` → fatal (bad data or misconfiguration;
 ///   reconnecting to a different endpoint won't help).
@@ -41,7 +48,15 @@ pub fn classify(chain: ChainId, stage: &str, e: hodl_core::error::Error) -> Atte
     use hodl_core::error::Error;
     let msg = format!("{}: {stage}: {e}", chain.display_name());
     match e {
-        Error::TofuMismatch { .. } => AttemptResult::Fatal(msg),
+        Error::TofuMismatch {
+            host,
+            pinned,
+            presented,
+        } => AttemptResult::TofuMismatch {
+            host,
+            pinned,
+            presented,
+        },
         Error::Network(_) | Error::Io(_) | Error::Endpoint(_) => AttemptResult::Retry(msg),
         Error::Codec(_) | Error::Chain(_) | Error::Config(_) => AttemptResult::Fatal(msg),
     }

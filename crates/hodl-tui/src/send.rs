@@ -53,6 +53,7 @@ use hodl_wallet::UnlockedWallet;
 use crate::active_chain::{ActiveChain, PreparedSend, SendOpts};
 use crate::help::{HelpAction, HelpOverlay};
 use crate::retry::{self, MAX_ATTEMPTS as MAX_SEND_ATTEMPTS};
+use crate::tofu_overlay::{TofuAction, TofuOverlay};
 
 // ── Field indices ──────────────────────────────────────────────────────────
 
@@ -201,20 +202,60 @@ enum SendAttempt<T> {
     Fatal(String),
     /// Retryable error; outer loop will try again.
     Retry(String),
+    /// TOFU cert mismatch — not retryable; surface the remediation overlay.
+    TofuMismatch {
+        host: String,
+        pinned: String,
+        presented: String,
+    },
+}
+
+/// Typed result returned by the build worker thread over its channel.
+enum BuildOutcome {
+    Ok(Box<BroadcastPayload>),
+    Err(String),
+    TofuMismatch {
+        host: String,
+        pinned: String,
+        presented: String,
+    },
+}
+
+/// Typed result returned by the broadcast worker thread over its channel.
+enum BroadcastOutcome {
+    Ok(String),
+    Err(String),
+    TofuMismatch {
+        host: String,
+        pinned: String,
+        presented: String,
+    },
+}
+
+/// After a TOFU prompt in the Send flow, which phase should the app resume?
+#[allow(dead_code)]
+enum TofuResumeAfter {
+    ToForm,
 }
 
 enum Phase {
     Form,
     /// Off-thread: estimate_fee + build_send. Carries the channel and an
     /// atomic attempt counter updated by the worker on each retry.
-    Building(Receiver<Result<BroadcastPayload, String>>, Arc<AtomicU32>),
+    Building(Receiver<BuildOutcome>, Arc<AtomicU32>),
     /// Off-thread: sign_and_broadcast. Carries the channel and an atomic
     /// attempt counter updated by the worker on each retry.
-    Broadcasting(Receiver<Result<String, String>>, Arc<AtomicU32>),
+    Broadcasting(Receiver<BroadcastOutcome>, Arc<AtomicU32>),
     /// Broadcast succeeded; hold TxId string.
     Result(String),
     /// Submit failed; error message.
     Error(String),
+    /// TOFU cert mismatch detected — show remediation overlay.
+    TofuPrompt {
+        overlay: TofuOverlay,
+        #[allow(dead_code)]
+        resume: TofuResumeAfter,
+    },
 }
 
 pub struct SendState {
@@ -365,20 +406,31 @@ impl SendState {
         match &mut self.phase {
             Phase::Building(rx, _attempt) => {
                 match rx.try_recv() {
-                    Ok(Ok(payload)) => {
+                    Ok(BuildOutcome::Ok(payload)) => {
                         // Build succeeded — kick off broadcast thread.
                         let (tx, brx) = mpsc::channel();
                         let bcast_attempt = Arc::new(AtomicU32::new(1));
                         let bcast_attempt_worker = Arc::clone(&bcast_attempt);
                         std::thread::spawn(move || {
-                            let result = broadcast_thread(payload, bcast_attempt_worker);
+                            let result = broadcast_thread(*payload, bcast_attempt_worker);
                             let _ = tx.send(result);
                         });
                         self.phase = Phase::Broadcasting(brx, bcast_attempt);
                         true
                     }
-                    Ok(Err(msg)) => {
+                    Ok(BuildOutcome::Err(msg)) => {
                         self.phase = Phase::Error(msg);
+                        true
+                    }
+                    Ok(BuildOutcome::TofuMismatch {
+                        host,
+                        pinned,
+                        presented,
+                    }) => {
+                        self.phase = Phase::TofuPrompt {
+                            overlay: TofuOverlay::new(host, pinned, presented),
+                            resume: TofuResumeAfter::ToForm,
+                        };
                         true
                     }
                     Err(TryRecvError::Disconnected) => {
@@ -389,12 +441,23 @@ impl SendState {
                 }
             }
             Phase::Broadcasting(rx, _attempt) => match rx.try_recv() {
-                Ok(Ok(txid)) => {
+                Ok(BroadcastOutcome::Ok(txid)) => {
                     self.phase = Phase::Result(txid);
                     true
                 }
-                Ok(Err(msg)) => {
+                Ok(BroadcastOutcome::Err(msg)) => {
                     self.phase = Phase::Error(msg);
+                    true
+                }
+                Ok(BroadcastOutcome::TofuMismatch {
+                    host,
+                    pinned,
+                    presented,
+                }) => {
+                    self.phase = Phase::TofuPrompt {
+                        overlay: TofuOverlay::new(host, pinned, presented),
+                        resume: TofuResumeAfter::ToForm,
+                    };
                     true
                 }
                 Err(TryRecvError::Disconnected) => {
@@ -433,10 +496,12 @@ impl SendState {
                     ]
                 }
             }
-            Phase::Building(_, _) | Phase::Broadcasting(_, _) => vec![
-                ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
-                ("F1".into(), "Show this help".into()),
-            ],
+            Phase::Building(_, _) | Phase::Broadcasting(_, _) | Phase::TofuPrompt { .. } => {
+                vec![
+                    ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
+                    ("F1".into(), "Show this help".into()),
+                ]
+            }
             Phase::Result(_) => vec![
                 ("Enter / q / Esc".into(), "Return to accounts".into()),
                 ("F1".into(), "Show this help".into()),
@@ -531,6 +596,7 @@ impl SendState {
                 &data_root,
                 build_attempt_worker,
             );
+            // Zeroize on every exit path, including TofuMismatch.
             seed.zeroize();
             let _ = tx.send(result);
         });
@@ -541,8 +607,12 @@ impl SendState {
 
 // ── Worker functions ────────────────────────────────────────────────────────
 
-/// Build thread: open chain, estimate fee, build_send. Returns a `BroadcastPayload`.
+/// Build thread: open chain, estimate fee, build_send. Returns a `BuildOutcome`.
 /// Retries up to `MAX_SEND_ATTEMPTS` times on transient network errors.
+/// A TOFU mismatch exits immediately (no retry) and returns `TofuMismatch`.
+///
+/// The seed reference stays live across build retries. The caller must zeroize
+/// it after this function returns — on every exit path including `TofuMismatch`.
 #[allow(clippy::too_many_arguments)]
 fn build_thread(
     chain: ChainId,
@@ -557,7 +627,7 @@ fn build_thread(
     known_hosts: &Arc<Mutex<KnownHosts>>,
     data_root: &std::path::Path,
     attempt_counter: Arc<AtomicU32>,
-) -> Result<BroadcastPayload, String> {
+) -> BuildOutcome {
     debug!("build_thread for chain {:?}", chain);
 
     for attempt in 1..=MAX_SEND_ATTEMPTS {
@@ -575,12 +645,25 @@ fn build_thread(
             known_hosts,
             data_root,
         ) {
-            SendAttempt::Done(payload) => return Ok(payload),
-            SendAttempt::Fatal(msg) => return Err(msg),
+            SendAttempt::Done(payload) => return BuildOutcome::Ok(Box::new(payload)),
+            SendAttempt::Fatal(msg) => return BuildOutcome::Err(msg),
+            SendAttempt::TofuMismatch {
+                host,
+                pinned,
+                presented,
+            } => {
+                // Security signal — propagate as typed outcome so the UI can
+                // surface the remediation overlay. Seed is zeroized by caller.
+                return BuildOutcome::TofuMismatch {
+                    host,
+                    pinned,
+                    presented,
+                };
+            }
             SendAttempt::Retry(reason) => {
                 debug!("build attempt {attempt} failed: {reason}; retrying");
                 if attempt == MAX_SEND_ATTEMPTS {
-                    return Err(format!(
+                    return BuildOutcome::Err(format!(
                         "all {MAX_SEND_ATTEMPTS} endpoints failed — last: {reason}"
                     ));
                 }
@@ -638,8 +721,8 @@ fn try_build_once(
     }
 }
 
-/// Broadcast thread: sign **once**, then broadcast with retry. Returns the
-/// TxId string.
+/// Broadcast thread: sign **once**, then broadcast with retry.
+/// Returns a `BroadcastOutcome` (Ok with TxId, Err with message, or TofuMismatch).
 ///
 /// The signing step is deterministic and local (no network), so it runs
 /// outside the retry loop: on success the seed is immediately zeroized and
@@ -652,11 +735,12 @@ fn try_build_once(
 /// retry would waste CPU and would not change the tx (deterministic).
 ///
 /// Zeroizes `payload.seed` on **every** exit path so a failed broadcast
-/// doesn't leave a live seed copy in dropped stack memory.
+/// doesn't leave a live seed copy in dropped stack memory. This includes the
+/// new TofuMismatch exit path.
 fn broadcast_thread(
     mut payload: BroadcastPayload,
     attempt_counter: Arc<AtomicU32>,
-) -> Result<String, String> {
+) -> BroadcastOutcome {
     debug!("broadcast_thread for chain {:?}", payload.chain);
 
     // ── Phase 1: connect once + sign locally ────────────────────────────────
@@ -677,7 +761,16 @@ fn broadcast_thread(
             payload.seed.zeroize();
             return match send_classify(payload.chain, "connect", e) {
                 SendAttempt::Done(_) => unreachable!(),
-                SendAttempt::Fatal(msg) | SendAttempt::Retry(msg) => Err(msg),
+                SendAttempt::Fatal(msg) | SendAttempt::Retry(msg) => BroadcastOutcome::Err(msg),
+                SendAttempt::TofuMismatch {
+                    host,
+                    pinned,
+                    presented,
+                } => BroadcastOutcome::TofuMismatch {
+                    host,
+                    pinned,
+                    presented,
+                },
             };
         }
     };
@@ -694,7 +787,7 @@ fn broadcast_thread(
             // Sign failures are always fatal — re-trying with a different
             // server won't change the result (signing is local and
             // deterministic).
-            return Err(format!("{}: sign: {e}", payload.chain.display_name()));
+            return BroadcastOutcome::Err(format!("{}: sign: {e}", payload.chain.display_name()));
         }
     };
     // Seed is no longer needed once signing is done. Zero it immediately
@@ -715,29 +808,51 @@ fn broadcast_thread(
             Ok(a) => a,
             Err(e) => match send_classify(payload.chain, "connect", e) {
                 SendAttempt::Done(_) => unreachable!(),
-                SendAttempt::Fatal(msg) => return Err(msg),
+                SendAttempt::Fatal(msg) => return BroadcastOutcome::Err(msg),
                 SendAttempt::Retry(reason) => {
                     debug!("broadcast attempt {attempt} connect failed: {reason}");
                     last_reason = Some(reason);
                     continue;
                 }
+                SendAttempt::TofuMismatch {
+                    host,
+                    pinned,
+                    presented,
+                } => {
+                    return BroadcastOutcome::TofuMismatch {
+                        host,
+                        pinned,
+                        presented,
+                    };
+                }
             },
         };
 
         match active.broadcast_only(signed.clone()) {
-            Ok(txid) => return Ok(txid.0),
+            Ok(txid) => return BroadcastOutcome::Ok(txid.0),
             Err(e) => match send_classify(payload.chain, "broadcast", e) {
                 SendAttempt::Done(_) => unreachable!(),
-                SendAttempt::Fatal(msg) => return Err(msg),
+                SendAttempt::Fatal(msg) => return BroadcastOutcome::Err(msg),
                 SendAttempt::Retry(reason) => {
                     debug!("broadcast attempt {attempt} failed: {reason}");
                     last_reason = Some(reason);
+                }
+                SendAttempt::TofuMismatch {
+                    host,
+                    pinned,
+                    presented,
+                } => {
+                    return BroadcastOutcome::TofuMismatch {
+                        host,
+                        pinned,
+                        presented,
+                    };
                 }
             },
         }
     }
     let reason = last_reason.unwrap_or_else(|| "no detail".into());
-    Err(format!(
+    BroadcastOutcome::Err(format!(
         "all {MAX_SEND_ATTEMPTS} endpoints failed — last: {reason}"
     ))
 }
@@ -752,6 +867,15 @@ fn send_classify(
         crate::retry::AttemptResult::Done => unreachable!(),
         crate::retry::AttemptResult::Fatal(msg) => SendAttempt::Fatal(msg),
         crate::retry::AttemptResult::Retry(msg) => SendAttempt::Retry(msg),
+        crate::retry::AttemptResult::TofuMismatch {
+            host,
+            pinned,
+            presented,
+        } => SendAttempt::TofuMismatch {
+            host,
+            pinned,
+            presented,
+        },
     }
 }
 
@@ -870,6 +994,44 @@ where
                     continue;
                 }
 
+                // TOFU prompt: route keys to the overlay, handle resolution.
+                if let Phase::TofuPrompt { overlay, .. } = &mut state.phase {
+                    let action = overlay.handle_key(k);
+                    match action {
+                        TofuAction::TrustNew => {
+                            // Extract host + presented from the overlay before
+                            // we replace state.phase.
+                            let (host, presented) =
+                                if let Phase::TofuPrompt { overlay, .. } = &state.phase {
+                                    (overlay.host().to_string(), overlay.presented().to_string())
+                                } else {
+                                    unreachable!()
+                                };
+                            // Update the shared KnownHosts store — poison-recovery.
+                            {
+                                let mut kh = match state.known_hosts.lock() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                kh.insert(host.clone(), presented);
+                                if let Err(e) = kh.save(&state.data_root) {
+                                    tracing::warn!(
+                                        "save known_hosts after Trust new for {host}: {e}"
+                                    );
+                                }
+                            }
+                            state.flash =
+                                Some(format!("pin updated for {host}; press Enter to retry"));
+                            state.phase = Phase::Form;
+                        }
+                        TofuAction::StayPinned | TofuAction::Abort => {
+                            state.phase = Phase::Error("TOFU mismatch — see logs".into());
+                        }
+                        TofuAction::Nav | TofuAction::None => {}
+                    }
+                    continue;
+                }
+
                 // Result pane: Enter or q returns to accounts.
                 if matches!(state.phase, Phase::Result(_)) {
                     if matches!(k.code, KeyCode::Enter | KeyCode::Char('q') | KeyCode::Esc) {
@@ -941,11 +1103,21 @@ where
 
 pub fn draw(f: &mut ratatui::Frame, state: &mut SendState) {
     let area = f.area();
+    // Check for TofuPrompt before the general match so we can clone what we
+    // need without holding a borrow on `state` across `draw_form_phase`.
+    if matches!(state.phase, Phase::TofuPrompt { .. }) {
+        draw_form_phase(f, area, state);
+        if let Phase::TofuPrompt { overlay, .. } = &state.phase {
+            overlay.draw(f, area);
+        }
+        return;
+    }
     match &state.phase {
         Phase::Result(txid) => draw_result(f, area, txid.clone()),
         Phase::Error(msg) => draw_error(f, area, msg.clone(), state),
         Phase::Building(_, _) | Phase::Broadcasting(_, _) => draw_busy(f, area, state),
         Phase::Form => draw_form_phase(f, area, state),
+        Phase::TofuPrompt { .. } => unreachable!(),
     }
 }
 

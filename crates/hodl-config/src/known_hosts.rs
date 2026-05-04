@@ -156,4 +156,34 @@ mod tests {
             "load must not create the file if it is missing"
         );
     }
+
+    #[test]
+    fn mismatch_overwrite() {
+        let tmp = TempDir::new().unwrap();
+        let host = "electrum.example.com:50002";
+        let fp1 = "aabbccddeeff0011";
+        let fp2 = "11223344556677ff";
+
+        // First pin.
+        let mut kh = KnownHosts::default();
+        kh.insert(host, fp1);
+        kh.save(tmp.path()).unwrap();
+
+        // Verify round-trip.
+        let loaded1 = KnownHosts::load(tmp.path()).unwrap();
+        assert_eq!(loaded1.get(host), Some(fp1));
+
+        // Overwrite with new fingerprint (Trust new path).
+        let mut kh2 = KnownHosts::load(tmp.path()).unwrap();
+        kh2.insert(host, fp2);
+        kh2.save(tmp.path()).unwrap();
+
+        // Verify the new fingerprint is persisted.
+        let loaded2 = KnownHosts::load(tmp.path()).unwrap();
+        assert_eq!(
+            loaded2.get(host),
+            Some(fp2),
+            "second save must overwrite the first pin"
+        );
+    }
 }

@@ -17,6 +17,11 @@ and this project adheres to
   `pkg/homebrew/hodl.rb.in` template + `brew-tap` job in `release.yml` renders
   the formula with the just-uploaded macOS sha256s and pushes it to
   `kryptic-sh/homebrew-tap`. Install with `brew install kryptic-sh/tap/hodl`.
+- TUI overlay for TOFU fingerprint mismatch — review pinned vs presented and
+  choose Trust new / Stay pinned / Abort without leaving the app. Defaults to
+  fail-closed (Abort is the default-selected button; Enter does not silently
+  trust). Triggered from Accounts/Addresses scan and from Send build/broadcast
+  retries. Closes #6.
 
 ## [0.3.1] - 2026-05-05
 
