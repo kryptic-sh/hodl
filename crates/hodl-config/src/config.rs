@@ -178,10 +178,15 @@ fn default_chains() -> HashMap<ChainId, ChainConfig> {
             ssl("doge.aftrek.org", 50002),
         ]),
     );
-    // NavCoin: only one public Electrum server is currently online.
     m.insert(
         ChainId::NavCoin,
-        cc(vec![ssl("electrum3.nav.community", 40002)]),
+        cc(vec![
+            ssl("electrum.nav.community", 40002),
+            ssl("electrum1.nav.community", 40002),
+            ssl("electrum2.nav.community", 40002),
+            ssl("electrum3.nav.community", 40002),
+            ssl("electrum4.nav.community", 40002),
+        ]),
     );
     m
 }
