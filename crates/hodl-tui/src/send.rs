@@ -1162,17 +1162,8 @@ fn draw_error(f: &mut ratatui::Frame, area: Rect, msg: String, state: &mut SendS
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /// Scale a human-readable decimal amount to the chain's smallest unit.
-///
-/// BTC-family: value is interpreted as the major unit (BTC/LTC/etc.), scaled
-/// by 1e8 to satoshis. ETH-family: value is in ETH, scaled by 1e18 to wei.
-/// Monero: value is in XMR, scaled by 1e12 to piconero.
 fn chain_amount_atoms(chain: ChainId, value: f64) -> u128 {
-    use ChainId::*;
-    let scale: f64 = match chain {
-        Bitcoin | BitcoinTestnet | Litecoin | Dogecoin | BitcoinCash | NavCoin => 1e8,
-        Ethereum | BscMainnet => 1e18,
-        Monero => 1e12,
-    };
+    let scale = 10f64.powi(chain.decimals() as i32);
     (value * scale).round() as u128
 }
 

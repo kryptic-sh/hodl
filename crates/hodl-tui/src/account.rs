@@ -51,6 +51,7 @@ use zeroize::Zeroize;
 use hodl_wallet::UnlockedWallet;
 
 use crate::active_chain::ActiveChain;
+use crate::format;
 
 /// Events sent from the scan worker thread to the UI.
 enum ScanEvent {
@@ -595,15 +596,6 @@ fn single_address_scan(
 
 // ── Rendering ─────────────────────────────────────────────────────────────
 
-/// Format a satoshi amount as a decimal coin string (e.g. `1.23456789 BTC`).
-fn format_sats(sats: u64, chain: ChainId) -> String {
-    let symbol = chain.ticker();
-    // All supported chains use 8 decimal places (sats / 1e8).
-    let whole = sats / 100_000_000;
-    let frac = sats % 100_000_000;
-    format!("{whole}.{frac:08} {symbol}")
-}
-
 /// Human-readable purpose label for the card title.
 fn purpose_label(chain: ChainId) -> &'static str {
     match chain {
@@ -688,9 +680,9 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
             Line::from(""),
         ]
     } else if let Some(scan) = display_scan {
-        let confirmed = format_sats(scan.total.confirmed, state.current_chain);
-        let pending = format_sats(scan.total.pending, state.current_chain);
-        let total = format_sats(scan.total.total(), state.current_chain);
+        let confirmed = format::format_amount(scan.total.confirmed, state.current_chain);
+        let pending = format::format_amount(scan.total.pending, state.current_chain);
+        let total = format::format_amount(scan.total.total(), state.current_chain);
         let used_count = scan.used.len();
         // Spinner suffix only while a scan is in flight.
         let suffix: Span = if state.is_scanning() {

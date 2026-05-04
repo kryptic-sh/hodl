@@ -10,6 +10,7 @@ pub mod address_book;
 pub mod addresses;
 pub mod app;
 pub mod clipboard;
+pub mod format;
 pub mod help;
 pub mod lock;
 pub mod onboarding;

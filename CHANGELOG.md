@@ -85,6 +85,17 @@ and this project adheres to
 
 ### Added
 
+- **Per-chain decimal precision.** New `ChainId::decimals() -> u32` method in
+  `hodl-core` returns the chain's atomic-unit decimal count (8 for BTC family,
+  18 for ETH/BSC, 12 for Monero). Replaces hardcoded `1e8` / `100_000_000`
+  scales in the TUI: amount-formatting helpers (`account.rs::format_sats` and
+  `addresses.rs::format_atoms`) are consolidated into a new
+  `hodl_tui::format::format_amount(atoms: u64, chain: ChainId)` that picks
+  decimal width per chain, and `send.rs::chain_amount_atoms` uses
+  `chain.decimals()` instead of a hand-rolled match. Foundation for multi-row
+  EVM/Monero scan displays — at the cost of a u64 ceiling on amounts (ETH wei
+  needs u128, deferred alongside `BalanceSplit` widening).
+
 - **Send-screen address-book picker.** While focused on the recipient field in
   Normal mode, **Ctrl+B** opens a centred picker overlay listing saved contacts
   whose `chain` matches the active send chain (other chains' contacts are

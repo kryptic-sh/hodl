@@ -26,6 +26,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, TableState};
 
+use crate::format;
+
 /// Action emitted to the parent (app.rs) when the addresses screen wants to
 /// transition.
 #[derive(Debug)]
@@ -127,16 +129,6 @@ impl AddressesState {
 
 // ── Rendering ─────────────────────────────────────────────────────────────
 
-/// Format a satoshi amount as a decimal coin string (e.g. `1.23456789 BTC`).
-///
-/// All currently-supported chains use 8 decimal places (atoms / 1e8).
-fn format_atoms(atoms: u64, chain: ChainId) -> String {
-    let symbol = chain.ticker();
-    let whole = atoms / 100_000_000;
-    let frac = atoms % 100_000_000;
-    format!("{whole}.{frac:08} {symbol}")
-}
-
 /// Render the Addresses table.
 ///
 /// `scan` is the live wallet scan owned by `AccountState` — pass
@@ -230,8 +222,8 @@ pub fn draw(
                     ratatui::widgets::Cell::from(type_label).style(Style::default().fg(type_color)),
                     ratatui::widgets::Cell::from(path),
                     ratatui::widgets::Cell::from(u.address.clone()),
-                    ratatui::widgets::Cell::from(format_atoms(u.balance.confirmed, chain)),
-                    ratatui::widgets::Cell::from(format_atoms(u.balance.pending, chain)),
+                    ratatui::widgets::Cell::from(format::format_amount(u.balance.confirmed, chain)),
+                    ratatui::widgets::Cell::from(format::format_amount(u.balance.pending, chain)),
                 ])
             })
             .collect();

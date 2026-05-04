@@ -61,7 +61,47 @@ impl ChainId {
         }
     }
 
+    /// Decimal places for this chain's native coin (satoshis, wei, piconero, etc.).
+    pub fn decimals(self) -> u32 {
+        match self {
+            ChainId::Bitcoin
+            | ChainId::BitcoinTestnet
+            | ChainId::Litecoin
+            | ChainId::Dogecoin
+            | ChainId::BitcoinCash
+            | ChainId::NavCoin => 8,
+            ChainId::Ethereum | ChainId::BscMainnet => 18,
+            ChainId::Monero => 12,
+        }
+    }
+
     pub fn is_testnet(self) -> bool {
         matches!(self, ChainId::BitcoinTestnet)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decimals_btc_family() {
+        assert_eq!(ChainId::Bitcoin.decimals(), 8);
+        assert_eq!(ChainId::BitcoinTestnet.decimals(), 8);
+        assert_eq!(ChainId::Litecoin.decimals(), 8);
+        assert_eq!(ChainId::Dogecoin.decimals(), 8);
+        assert_eq!(ChainId::BitcoinCash.decimals(), 8);
+        assert_eq!(ChainId::NavCoin.decimals(), 8);
+    }
+
+    #[test]
+    fn decimals_evm() {
+        assert_eq!(ChainId::Ethereum.decimals(), 18);
+        assert_eq!(ChainId::BscMainnet.decimals(), 18);
+    }
+
+    #[test]
+    fn decimals_monero() {
+        assert_eq!(ChainId::Monero.decimals(), 12);
     }
 }

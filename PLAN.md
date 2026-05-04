@@ -364,10 +364,6 @@ get re-prioritised.
   cached value or a static dash. Now that the sub-view streams live, in-flight
   rows could show a spinner indicator next to balances that are still being
   fetched (vs. final values).
-- **`format_atoms` decimals per chain.** The Addresses table's `format_atoms`
-  assumes 8 decimals (BTC family). Wrong for ETH (18) and Monero (12); not yet
-  visible because EVM/Monero scans degenerate to a single row, but will surface
-  when those chains support multi-row display.
 - **TOFU mismatch UX.** Today a fingerprint mismatch surfaces as a red
   status-line error pointing at `known_hosts.toml`. A guided remediation flow
   (show old vs new fingerprint, offer "trust new" / "stay pinned" / "abort"
