@@ -7,18 +7,18 @@
     <title>hodl — light crypto wallet. TUI. Rust + ratatui.</title>
     <meta
       name="description"
-      content="hodl — light crypto wallet for the terminal. BIP-39 seed restores Bitcoin, Ethereum, BSC, Monero, Navio, and major Bitcoin forks. Local keys, no custodian, no full node."
+      content="hodl — light crypto wallet for the terminal. BIP-39 seed restores Bitcoin, Ethereum, BSC, Monero, NavCoin, and major Bitcoin forks (LTC, DOGE, BCH). Local keys, no custodian, no full node."
     />
     <meta
       name="keywords"
-      content="hodl, crypto wallet, tui wallet, terminal wallet, rust wallet, light wallet, bitcoin, ethereum, monero, navio, bnb, bsc, litecoin, dogecoin, bch, bsv, bip39, ratatui, kryptic"
+      content="hodl, crypto wallet, tui wallet, terminal wallet, rust wallet, light wallet, bitcoin, ethereum, monero, navcoin, nav, bnb, bsc, litecoin, dogecoin, bitcoin cash, bch, bip39, ratatui, kryptic"
     />
     <link rel="canonical" href="https://hodl.kryptic.sh/" />
     <meta name="robots" content="index, follow" />
     <meta property="og:title" content="hodl — light crypto wallet (TUI)" />
     <meta
       property="og:description"
-      content="Light crypto wallet for the terminal. BIP-39 in, addresses out. Bitcoin, Ethereum, BSC, Monero, Navio, and major Bitcoin forks. Local keys, no custodian."
+      content="Light crypto wallet for the terminal. BIP-39 in, addresses out. Bitcoin, Ethereum, BSC, Monero, NavCoin, and major Bitcoin forks (LTC, DOGE, BCH). Local keys, no custodian."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://hodl.kryptic.sh/" />
@@ -46,7 +46,7 @@
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
         "name": "hodl",
-        "description": "Light crypto wallet for the terminal. BIP-39 seed restores Bitcoin, Ethereum, BSC, Monero, Navio, and major Bitcoin forks.",
+        "description": "Light crypto wallet for the terminal. BIP-39 seed restores Bitcoin, Ethereum, BSC, Monero, NavCoin, and major Bitcoin forks (LTC, DOGE, BCH).",
         "url": "https://hodl.kryptic.sh/",
         "applicationCategory": "FinanceApplication",
         "operatingSystem": "Linux, macOS, Windows",
@@ -769,6 +769,14 @@
                     <span class="name">Dogecoin</span
                     ><span class="amt">412 <span class="sym">DOGE</span></span>
                   </div>
+                  <div class="tui-row">
+                    <span class="name">Bitcoin Cash</span
+                    ><span class="amt">0.83 <span class="sym">BCH</span></span>
+                  </div>
+                  <div class="tui-row">
+                    <span class="name">NavCoin</span
+                    ><span class="amt">155 <span class="sym">NAV</span></span>
+                  </div>
                 </div>
               </div>
               <div class="col">
@@ -839,8 +847,8 @@
             <div class="icon">04 — MULTI</div>
             <h4>Multi-chain by default</h4>
             <p>
-              Bitcoin, Ethereum, Monero, BSC, plus the major Bitcoin forks. One
-              binary. One seed. One keyboard.
+              Bitcoin, Ethereum, BSC, Monero, NavCoin, plus the major Bitcoin
+              forks (LTC, DOGE, BCH). One binary. One seed. One keyboard.
             </p>
           </div>
           <div class="feat">
@@ -864,11 +872,12 @@
 
       <section id="chains">
         <h2>chains</h2>
-        <h3>MVP scope.</h3>
+        <h3>Send, receive, balance — shipped on every chain below.</h3>
         <p style="color: var(--fg-muted); margin: 0 0 24px">
-          Pre-MVP — derivation infrastructure landed; per-chain address /
-          balance / tx handlers in progress. The list below is the target for
-          the first cut.
+          Each chain ships address derivation, gap-limit scan, fee estimation,
+          sign, and broadcast. EVM and Monero currently expose a single primary
+          address per chain; multi-account / subaddress and ERC-20 reads are
+          tracked in the roadmap.
         </p>
 
         <div class="chains">
@@ -895,21 +904,27 @@
             </div>
           </div>
           <div class="chain tier1">
-            <div class="sym">NAVIO · slip-44 130</div>
-            <div class="name">Navio</div>
+            <div class="sym">NAV · slip-44 130</div>
+            <div class="name">NavCoin</div>
             <div class="meta">
               ElectrumX · BTC-derivative codebase · xNAV (blsCT) privacy
+              roadmapped
             </div>
           </div>
           <div class="chain tier1">
             <div class="sym">LTC · slip-44 2</div>
             <div class="name">Litecoin</div>
-            <div class="meta">Electrum-LTC · MWEB optional</div>
+            <div class="meta">Electrum-LTC · BIP-49 P2SH-segwit</div>
           </div>
           <div class="chain tier1">
             <div class="sym">DOGE · slip-44 3</div>
             <div class="name">Dogecoin</div>
-            <div class="meta">Electrum-Doge · public RPC</div>
+            <div class="meta">Electrum-Doge · BIP-44 P2PKH</div>
+          </div>
+          <div class="chain tier1">
+            <div class="sym">BCH · slip-44 145</div>
+            <div class="name">Bitcoin Cash</div>
+            <div class="meta">Electrum-Cash · CashAddr encoding</div>
           </div>
         </div>
       </section>
