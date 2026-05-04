@@ -10,6 +10,36 @@ and this project adheres to
 
 ### Changed
 
+- **TOFU cert pinning for Electrum TLS connections.** The previous
+  `AcceptAnyServerCert` verifier (which accepted any TLS cert silently) is
+  replaced with trust-on-first-use (TOFU) pinning, matching the default
+  behaviour of Electrum desktop and Sparrow. On the first TLS connection to a
+  given `host:port`, the SHA-256 fingerprint of the server's leaf certificate is
+  recorded in `<data_root>/known_hosts.toml`. Subsequent connections to the same
+  endpoint verify the fingerprint matches the saved value. A mismatch is treated
+  as a **fatal, non-retryable security signal** (`Error::TofuMismatch`): the
+  scan fails immediately with a message naming both the pinned and presented
+  fingerprints, and the status line shows
+  `scan failed: <chain>: connect: TOFU mismatch for <host:port> …`. The retry
+  loop in the scan worker does **not** attempt a different endpoint on a TOFU
+  mismatch — that would silently hide a potential MitM. CA bundle validation is
+  intentionally omitted: Electrum servers overwhelmingly use self-signed certs
+  that would be rejected by any CA bundle. TOFU provides the correct wallet
+  trust model. New `hodl-config::KnownHosts` type manages the persistent pin
+  store with atomic (temp-file + rename) saves. The `known_hosts.toml` file is
+  never written on first load if it does not exist — it is created only when a
+  new pin is established. `connect_tls` and `connect_tls_via_socks5` now return
+  `(ElectrumClient, Option<String>)` — `Some(fp)` signals a new pin was
+  established (caller must save). The `known_hosts` store is loaded once at
+  `App::new_*` and shared via `Arc<Mutex<KnownHosts>>` across all scan threads
+  and the send pipeline.
+
+  **Recovering from a mismatch:** verify whether the server operator rotated
+  their TLS certificate intentionally (e.g. cert renewal). If the rotation is
+  legitimate, remove the stale entry from `known_hosts.toml` and reconnect — the
+  new fingerprint will be pinned automatically. If you did not expect a cert
+  change, investigate before reconnecting (potential MitM).
+
 - **Streaming wallet scan with live summary updates.** The Accounts summary card
   now updates incrementally as each used address is discovered, instead of
   showing only a spinner for the full scan duration.

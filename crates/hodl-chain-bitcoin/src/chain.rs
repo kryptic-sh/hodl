@@ -1168,7 +1168,10 @@ mod chain_tests {
         let seed_bytes: Vec<u8> = hex::decode(seed_hex).unwrap();
         let seed: [u8; 64] = seed_bytes.try_into().unwrap();
 
-        let electrum = ElectrumClient::connect_tls("electrum.blockstream.info", 50002).unwrap();
+        // Pass `pinned = None` → TOFU first-connect; we don't need to persist
+        // the fingerprint in this integration test.
+        let (electrum, _new_fp) =
+            ElectrumClient::connect_tls("electrum.blockstream.info", 50002, None).unwrap();
         let chain = BitcoinChain::new(NetworkParams::BITCOIN_MAINNET, electrum);
 
         let scan = chain.scan_used_addresses(&seed, 0, 20).unwrap();

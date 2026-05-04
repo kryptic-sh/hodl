@@ -23,16 +23,16 @@
 //! scanning, with the spinner ticking next to the numbers. The Addresses
 //! sub-view (`d`) is still gated on a completed scan snapshot.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_picker::{PickerAction, PickerEvent, PickerLogic};
 use hodl_chain_bitcoin::{UsedAddress, WalletScan};
-use hodl_config::Config;
+use hodl_config::{Config, KnownHosts};
 use hodl_core::{Address, Chain, ChainId};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -124,10 +124,14 @@ pub struct AccountState {
     config: Config,
     /// Currently-selected chain. Defaults to Bitcoin; updated by the picker.
     pub current_chain: ChainId,
+    /// Persistent TOFU cert pin store, shared across scan threads.
+    known_hosts: Arc<Mutex<KnownHosts>>,
+    /// Root directory for data files (known_hosts.toml, etc.).
+    data_root: PathBuf,
 }
 
 impl AccountState {
-    pub fn new(_data_root: PathBuf, config: Config) -> Self {
+    pub fn new(data_root: PathBuf, config: Config, known_hosts: Arc<Mutex<KnownHosts>>) -> Self {
         Self {
             scan: None,
             scan_error: None,
@@ -140,6 +144,8 @@ impl AccountState {
             flash: None,
             config,
             current_chain: ChainId::Bitcoin,
+            known_hosts,
+            data_root,
         }
     }
 
@@ -239,13 +245,20 @@ impl AccountState {
         // Extract seed bytes to move into the thread. [u8; 64] is Copy + Send;
         // we zeroize the closure-captured copy explicitly before the thread exits.
         let seed: [u8; 64] = *wallet.seed().as_bytes();
+        let known_hosts = Arc::clone(&self.known_hosts);
+        let data_root = self.data_root.clone();
 
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             // Mutable rebinding so we can zeroize the actual captured array
             // (not a fresh Copy) after the worker returns on every exit path.
             let mut seed = seed;
-            scan_thread_streaming(chain, &config, &seed, gap_limit, 0, &tx);
+            let ctx = ScanCtx {
+                config: &config,
+                known_hosts: &known_hosts,
+                data_root: &data_root,
+            };
+            scan_thread_streaming(chain, &ctx, &seed, gap_limit, 0, &tx);
             seed.zeroize();
         });
 
@@ -274,7 +287,13 @@ impl AccountState {
     /// otherwise falls back to deriving index 0. The path matches the chain's
     /// actual purpose via `ActiveChain::derivation_path`.
     pub fn pick_receive(&self, wallet: &UnlockedWallet) -> Option<(Address, String)> {
-        let active = ActiveChain::from_chain_id(self.current_chain, &self.config).ok()?;
+        let active = ActiveChain::from_chain_id(
+            self.current_chain,
+            &self.config,
+            &self.known_hosts,
+            &self.data_root,
+        )
+        .ok()?;
 
         // Try first used receive address (change=0) from the scan.
         if let Some(scan) = &self.scan
@@ -384,6 +403,14 @@ impl AccountState {
     }
 }
 
+/// Shared context passed to the scan worker and each scan attempt.
+/// Bundles connection context to keep argument counts under the clippy limit.
+struct ScanCtx<'a> {
+    config: &'a Config,
+    known_hosts: &'a Arc<Mutex<KnownHosts>>,
+    data_root: &'a Path,
+}
+
 /// Streaming worker function executed on the background thread.
 ///
 /// For Bitcoin-family chains: calls `scan_used_addresses_streaming`, sending a
@@ -404,7 +431,7 @@ impl AccountState {
 /// seed material).
 fn scan_thread_streaming(
     chain: ChainId,
-    config: &Config,
+    ctx: &ScanCtx<'_>,
     seed: &[u8; 64],
     gap_limit: u32,
     account: u32,
@@ -423,7 +450,7 @@ fn scan_thread_streaming(
             let _ = tx.send(ScanEvent::Reset { attempt });
         }
 
-        let outcome = run_scan_attempt(chain, config, seed, gap_limit, account, tx);
+        let outcome = run_scan_attempt(chain, ctx, seed, gap_limit, account, tx);
         match outcome {
             AttemptResult::Done => return,
             AttemptResult::Fatal(msg) => {
@@ -459,13 +486,14 @@ enum AttemptResult {
 
 fn run_scan_attempt(
     chain: ChainId,
-    config: &Config,
+    ctx: &ScanCtx<'_>,
     seed: &[u8; 64],
     gap_limit: u32,
     account: u32,
     tx: &std::sync::mpsc::Sender<ScanEvent>,
 ) -> AttemptResult {
-    let active = match ActiveChain::from_chain_id(chain, config) {
+    let active = match ActiveChain::from_chain_id(chain, ctx.config, ctx.known_hosts, ctx.data_root)
+    {
         Ok(a) => a,
         Err(e) => {
             // Connect failure across all endpoints — try_endpoints already
@@ -507,10 +535,17 @@ fn run_scan_attempt(
 
 /// Map a `hodl_core::Error` into an `AttemptResult` via its retry-ability:
 /// network/IO failures retry; everything else is fatal.
+///
+/// `TofuMismatch` is always **fatal** — it is a security signal indicating
+/// the server's cert changed since first connect. Retrying would hide the
+/// signal and potentially connect to a different (clean) server, masking the
+/// mismatch. The user must investigate and manually remove the stale entry
+/// from `known_hosts.toml` before reconnecting.
 fn classify(chain: ChainId, stage: &str, e: hodl_core::error::Error) -> AttemptResult {
     use hodl_core::error::Error;
     let msg = format!("{}: {stage}: {e}", chain.display_name());
     match e {
+        Error::TofuMismatch { .. } => AttemptResult::Fatal(msg),
         Error::Network(_) | Error::Io(_) | Error::Endpoint(_) => AttemptResult::Retry(msg),
         Error::Codec(_) | Error::Chain(_) | Error::Config(_) => AttemptResult::Fatal(msg),
     }

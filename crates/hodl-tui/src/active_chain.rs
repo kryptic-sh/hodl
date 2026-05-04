@@ -1,11 +1,14 @@
 //! Per-chain dispatch enum. Picks the right concrete chain crate based on
 //! `ChainId` and the user's config (endpoint type + URL + Tor toggle).
 
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
 use hodl_chain_bitcoin::electrum::{ElectrumClient, Utxo};
 use hodl_chain_bitcoin::{BitcoinChain, InputHint, NetworkParams as BtcNetworkParams};
 use hodl_chain_ethereum::{EthRpcClient, EthereumChain, NetworkParams as EthNetworkParams};
 use hodl_chain_monero::{LwsClient, MoneroChain, NetworkParams as XmrNetworkParams};
-use hodl_config::{Config, Endpoint};
+use hodl_config::{Config, Endpoint, KnownHosts};
 use hodl_core::error::{Error, Result};
 use hodl_core::{Address, Amount, Chain, ChainId, FeeRate, SendParams, TxId, UnsignedTx};
 use rand::seq::SliceRandom;
@@ -36,7 +39,18 @@ pub struct SendOpts {
 }
 
 impl ActiveChain {
-    pub fn from_chain_id(id: ChainId, config: &Config) -> Result<Self> {
+    /// Build an `ActiveChain` for `id` using `config`.
+    ///
+    /// For Bitcoin-family chains the function connects to an Electrum server
+    /// with TOFU cert pinning. `known_hosts` carries the persistent pin store;
+    /// `data_root` is the directory where `known_hosts.toml` is written when a
+    /// new pin is recorded.
+    pub fn from_chain_id(
+        id: ChainId,
+        config: &Config,
+        known_hosts: &Arc<Mutex<KnownHosts>>,
+        data_root: &Path,
+    ) -> Result<Self> {
         let proxy = if config.tor.enabled {
             Some(config.tor.socks5.as_str())
         } else {
@@ -57,8 +71,9 @@ impl ActiveChain {
                     .iter()
                     .filter(|ep| matches!(ep, Endpoint::Electrum { .. }))
                     .collect();
-                let electrum =
-                    try_endpoints("Electrum", id, &endpoints, |ep| electrum_connect(ep, proxy))?;
+                let electrum = try_endpoints("Electrum", id, &endpoints, |ep| {
+                    electrum_connect(ep, proxy, known_hosts, data_root)
+                })?;
                 Ok(ActiveChain::Bitcoin(BitcoinChain::new(params, electrum)))
             }
             ChainId::Ethereum | ChainId::BscMainnet => {
@@ -275,7 +290,18 @@ where
 
 /// Connect to an Electrum server from a URL like `ssl://host:60002` or
 /// `tcp://host:50001`. Routes through SOCKS5 if `proxy` is `Some("socks5://…")`.
-pub fn electrum_connect(endpoint: &Endpoint, proxy: Option<&str>) -> Result<ElectrumClient> {
+///
+/// For TLS connections, TOFU cert pinning is enforced via `known_hosts`. On a
+/// fresh first-connect the server's leaf cert fingerprint is recorded in
+/// `known_hosts` and persisted to `<data_root>/known_hosts.toml`. On
+/// subsequent connects the fingerprint must match the pinned value or the
+/// connection is refused with `Error::TofuMismatch`.
+pub fn electrum_connect(
+    endpoint: &Endpoint,
+    proxy: Option<&str>,
+    known_hosts: &Arc<Mutex<KnownHosts>>,
+    data_root: &Path,
+) -> Result<ElectrumClient> {
     let url = match endpoint {
         Endpoint::Electrum { url, .. } => url.as_str(),
         other => {
@@ -296,8 +322,38 @@ pub fn electrum_connect(endpoint: &Endpoint, proxy: Option<&str>) -> Result<Elec
         .map_err(|_| Error::Network(format!("invalid port in Electrum URL: {url}")))?;
 
     match (scheme, proxy) {
-        ("ssl" | "tls", Some(p)) => ElectrumClient::connect_tls_via_socks5(host, port, p),
-        ("ssl" | "tls", None) => ElectrumClient::connect_tls(host, port),
+        ("ssl" | "tls", Some(p)) => {
+            let host_port = format!("{host}:{port}");
+            let pinned = known_hosts
+                .lock()
+                .unwrap()
+                .get(&host_port)
+                .map(str::to_owned);
+            let (client, new_fp) = ElectrumClient::connect_tls_via_socks5(host, port, p, pinned)?;
+            if let Some(fp) = new_fp {
+                known_hosts.lock().unwrap().insert(host_port, fp);
+                if let Err(e) = known_hosts.lock().unwrap().save(data_root) {
+                    tracing::warn!("failed to save known_hosts.toml: {e}");
+                }
+            }
+            Ok(client)
+        }
+        ("ssl" | "tls", None) => {
+            let host_port = format!("{host}:{port}");
+            let pinned = known_hosts
+                .lock()
+                .unwrap()
+                .get(&host_port)
+                .map(str::to_owned);
+            let (client, new_fp) = ElectrumClient::connect_tls(host, port, pinned)?;
+            if let Some(fp) = new_fp {
+                known_hosts.lock().unwrap().insert(host_port, fp);
+                if let Err(e) = known_hosts.lock().unwrap().save(data_root) {
+                    tracing::warn!("failed to save known_hosts.toml: {e}");
+                }
+            }
+            Ok(client)
+        }
         (_, Some(p)) => ElectrumClient::connect_tcp_via_socks5(host, port, p),
         (_, None) => ElectrumClient::connect_tcp(host, port),
     }
@@ -306,7 +362,7 @@ pub fn electrum_connect(endpoint: &Endpoint, proxy: Option<&str>) -> Result<Elec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hodl_config::{ChainConfig, Config, Endpoint, LockConfig, TorConfig};
+    use hodl_config::{ChainConfig, Config, Endpoint, KnownHosts, LockConfig, TorConfig};
     use std::collections::HashMap;
 
     fn config_with_endpoint(chain: ChainId, endpoint: Endpoint) -> Config {
@@ -326,6 +382,10 @@ mod tests {
         }
     }
 
+    fn empty_known_hosts() -> Arc<Mutex<KnownHosts>> {
+        Arc::new(Mutex::new(KnownHosts::default()))
+    }
+
     #[test]
     fn from_chain_id_picks_btc_for_bitcoin() {
         // A real Electrum connect would fail — we're testing the factory
@@ -339,7 +399,9 @@ mod tests {
                 tls: false,
             },
         );
-        let result = ActiveChain::from_chain_id(ChainId::Bitcoin, &cfg);
+        let kh = empty_known_hosts();
+        let tmp = tempfile::tempdir().unwrap();
+        let result = ActiveChain::from_chain_id(ChainId::Bitcoin, &cfg, &kh, tmp.path());
         // Either succeeds (unlikely in test env) or fails with a network
         // error — not an "endpoint" config error. That proves dispatch ran.
         match &result {
@@ -364,7 +426,9 @@ mod tests {
                 url: "http://127.0.0.1:18545".into(),
             },
         );
-        let result = ActiveChain::from_chain_id(ChainId::Ethereum, &cfg);
+        let kh = empty_known_hosts();
+        let tmp = tempfile::tempdir().unwrap();
+        let result = ActiveChain::from_chain_id(ChainId::Ethereum, &cfg, &kh, tmp.path());
         assert!(
             matches!(result, Ok(ActiveChain::Ethereum(_))),
             "expected Ok(Ethereum)"
@@ -381,7 +445,9 @@ mod tests {
             },
         );
         // Ask for Bitcoin which has no endpoint in this config.
-        let result = ActiveChain::from_chain_id(ChainId::Bitcoin, &cfg);
+        let kh = empty_known_hosts();
+        let tmp = tempfile::tempdir().unwrap();
+        let result = ActiveChain::from_chain_id(ChainId::Bitcoin, &cfg, &kh, tmp.path());
         assert!(
             result.is_err(),
             "expected error for missing Bitcoin endpoint"

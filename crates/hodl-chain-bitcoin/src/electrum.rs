@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use hodl_core::error::{Error, Result};
 use hodl_core::proxy::parse_socks5_url;
@@ -48,45 +48,68 @@ impl ElectrumClient {
         Ok(Self::from_transport(Box::new(stream.into_inner())))
     }
 
-    /// Open a TLS connection through a SOCKS5 proxy.
+    /// Open a TLS connection through a SOCKS5 proxy with TOFU cert pinning.
     ///
     /// SOCKS5 dials the tunnel, then rustls performs the TLS handshake over it.
     /// `proxy_url` — `socks5://host:port`.
-    pub fn connect_tls_via_socks5(host: &str, port: u16, proxy_url: &str) -> Result<Self> {
+    ///
+    /// Returns `(client, Some(fingerprint))` when a new fingerprint was pinned
+    /// (caller must persist it); `(client, None)` when an existing pin matched.
+    /// Returns `Err(Error::TofuMismatch { … })` on a fingerprint mismatch.
+    pub fn connect_tls_via_socks5(
+        host: &str,
+        port: u16,
+        proxy_url: &str,
+        pinned: Option<String>,
+    ) -> Result<(Self, Option<String>)> {
         use rustls::ClientConnection;
         use rustls::pki_types::ServerName;
 
+        let host_port = format!("{host}:{port}");
         let (proxy_host, proxy_port) = parse_socks5_url(proxy_url)?;
         let stream = socks::Socks5Stream::connect((proxy_host.as_str(), proxy_port), (host, port))
             .map_err(|e| Error::Network(format!("SOCKS5 connect {host}:{port}: {e}")))?;
         let tcp = stream.into_inner();
 
-        let config = electrum_tls_config();
+        let newly_pinned: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let config = electrum_tls_config(host_port.clone(), pinned, Arc::clone(&newly_pinned))?;
         let server_name = ServerName::try_from(host.to_owned())
             .map_err(|e| Error::Network(format!("invalid TLS server name {host}: {e}")))?;
-        let conn = ClientConnection::new(config, server_name)
-            .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+        let conn =
+            ClientConnection::new(config, server_name).map_err(|e| map_tls_error(e, &host_port))?;
         let tls = rustls::StreamOwned::new(conn, tcp);
-        Ok(Self::from_transport(Box::new(tls)))
+        let new_fp = newly_pinned.lock().unwrap().take();
+        Ok((Self::from_transport(Box::new(tls)), new_fp))
     }
 
-    /// Open a TLS connection.
+    /// Open a TLS connection with TOFU cert pinning.
     ///
-    /// Uses an Electrum-protocol-appropriate TLS config that accepts any
-    /// server certificate — see `electrum_tls_config` for rationale.
-    pub fn connect_tls(host: &str, port: u16) -> Result<Self> {
+    /// `pinned` — the previously-saved SHA-256 fingerprint for this `host:port`,
+    /// if any (pass `None` on first connect). On first connect the verifier pins
+    /// the server's leaf cert fingerprint and returns it as `Some(fp)` so the
+    /// caller can persist it. On subsequent connects with a matching fingerprint
+    /// returns `(client, None)`. On mismatch returns
+    /// `Err(Error::TofuMismatch { … })`.
+    pub fn connect_tls(
+        host: &str,
+        port: u16,
+        pinned: Option<String>,
+    ) -> Result<(Self, Option<String>)> {
         use rustls::ClientConnection;
         use rustls::pki_types::ServerName;
 
-        let config = electrum_tls_config();
+        let host_port = format!("{host}:{port}");
+        let newly_pinned: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let config = electrum_tls_config(host_port.clone(), pinned, Arc::clone(&newly_pinned))?;
         let server_name = ServerName::try_from(host.to_owned())
             .map_err(|e| Error::Network(format!("invalid TLS server name {host}: {e}")))?;
         let tcp = TcpStream::connect((host, port))
             .map_err(|e| Error::Network(format!("TCP connect {host}:{port}: {e}")))?;
-        let conn = ClientConnection::new(config, server_name)
-            .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+        let conn =
+            ClientConnection::new(config, server_name).map_err(|e| map_tls_error(e, &host_port))?;
         let tls = rustls::StreamOwned::new(conn, tcp);
-        Ok(Self::from_transport(Box::new(tls)))
+        let new_fp = newly_pinned.lock().unwrap().take();
+        Ok((Self::from_transport(Box::new(tls)), new_fp))
     }
 
     fn next_id(&mut self) -> u64 {
@@ -203,39 +226,105 @@ pub struct ScriptHashBalance {
 
 // ── TLS configuration ─────────────────────────────────────────────────────
 
-/// Build a `rustls::ClientConfig` suitable for talking to Electrum servers.
+/// Compute the SHA-256 fingerprint of a TLS certificate's DER bytes.
 ///
-/// **Accepts any server certificate.** This is intentional and matches
-/// every Electrum-protocol wallet (Electrum desktop, Sparrow, BlueWallet,
-/// BWT). The protocol's trust model is:
+/// Returns a lowercase hex string (64 characters, no separators). This is the
+/// same computation used by Electrum desktop and Sparrow for TOFU pinning.
+pub fn cert_fingerprint_sha256(cert_der: &[u8]) -> String {
+    let hash = Sha256::digest(cert_der);
+    hex::encode(hash)
+}
+
+/// Convert a `rustls::Error` into a `hodl_core::Error`, detecting TOFU
+/// mismatch messages encoded by `TofuVerifier` via `rustls::Error::General`.
+fn map_tls_error(e: rustls::Error, host_port: &str) -> Error {
+    // TofuVerifier encodes mismatches as:
+    // "TOFU mismatch for <host:port>: pinned <fp>, server presented <fp2>"
+    // We parse this prefix to upgrade it to Error::TofuMismatch.
+    let msg = e.to_string();
+    if let Some(rest) = msg.strip_prefix("TOFU mismatch for ") {
+        // Format: "<host:port>: pinned <pinned>, server presented <presented>"
+        if let Some(colon_pos) = rest.find(": pinned ") {
+            let host = rest[..colon_pos].to_string();
+            let after_pinned = &rest[colon_pos + ": pinned ".len()..];
+            if let Some(sep_pos) = after_pinned.find(", server presented ") {
+                let pinned = after_pinned[..sep_pos].to_string();
+                let presented = after_pinned[sep_pos + ", server presented ".len()..].to_string();
+                return Error::TofuMismatch {
+                    host,
+                    pinned,
+                    presented,
+                };
+            }
+        }
+    }
+    Error::Network(format!("TLS error for {host_port}: {e}"))
+}
+
+/// Build a `rustls::ClientConfig` with TOFU cert pinning for the given
+/// `host:port`.
 ///
-/// - Operators rarely bother with CA-signed certs; the curated server lists
-///   are dominated by self-signed certs.
-/// - The wallet's defence is **cross-checking** answers across multiple
-///   independent servers, not trusting any single one's TLS chain.
-/// - Watch-only / view-only RPC traffic only — no spending keys cross the
-///   wire.
+/// The verifier compares the server's leaf cert fingerprint against `pinned`:
 ///
-/// Verifying against the Mozilla CA bundle (webpki-roots) would reject
-/// virtually every server in the curated list and make the wallet unusable.
-fn electrum_tls_config() -> Arc<rustls::ClientConfig> {
+/// - `pinned == None` → first connect: write the fingerprint into `on_pinned`
+///   and accept.
+/// - `pinned == Some(fp)` and fingerprints match → accept.
+/// - `pinned == Some(fp)` and fingerprints differ → refuse with
+///   `rustls::Error::General` carrying the mismatch details so `map_tls_error`
+///   can upgrade it to `Error::TofuMismatch`.
+///
+/// The cert chain itself is NOT validated against any CA bundle — Electrum
+/// servers overwhelmingly use self-signed certs. TOFU pinning is the
+/// wallet-appropriate trust model (Electrum desktop / Sparrow default).
+///
+/// TLS-12/13 signature verification is intentionally bypassed (same as the
+/// previous `AcceptAnyServerCert`) — it would reject self-signed certs that
+/// use RSA keys without a certificate chain that rustls can verify.
+fn electrum_tls_config(
+    host_port: String,
+    pinned: Option<String>,
+    on_pinned: Arc<Mutex<Option<String>>>,
+) -> Result<Arc<rustls::ClientConfig>> {
     use rustls::ClientConfig;
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
     use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 
     #[derive(Debug)]
-    struct AcceptAnyServerCert;
+    struct TofuVerifier {
+        host_port: String,
+        pinned: Option<String>,
+        on_pinned: Arc<Mutex<Option<String>>>,
+    }
 
-    impl ServerCertVerifier for AcceptAnyServerCert {
+    impl ServerCertVerifier for TofuVerifier {
         fn verify_server_cert(
             &self,
-            _end_entity: &CertificateDer<'_>,
+            end_entity: &CertificateDer<'_>,
             _intermediates: &[CertificateDer<'_>],
             _server_name: &ServerName<'_>,
             _ocsp_response: &[u8],
             _now: UnixTime,
         ) -> std::result::Result<ServerCertVerified, rustls::Error> {
-            Ok(ServerCertVerified::assertion())
+            let computed = cert_fingerprint_sha256(end_entity.as_ref());
+            match &self.pinned {
+                Some(saved) if saved == &computed => {
+                    // Pin matches — allow.
+                    Ok(ServerCertVerified::assertion())
+                }
+                Some(saved) => {
+                    // Mismatch — refuse with a structured message that
+                    // `map_tls_error` can parse into `Error::TofuMismatch`.
+                    Err(rustls::Error::General(format!(
+                        "TOFU mismatch for {}: pinned {}, server presented {}",
+                        self.host_port, saved, computed
+                    )))
+                }
+                None => {
+                    // First connect — pin and accept.
+                    *self.on_pinned.lock().unwrap() = Some(computed);
+                    Ok(ServerCertVerified::assertion())
+                }
+            }
         }
 
         fn verify_tls12_signature(
@@ -273,11 +362,17 @@ fn electrum_tls_config() -> Arc<rustls::ClientConfig> {
         }
     }
 
+    let verifier = TofuVerifier {
+        host_port,
+        pinned,
+        on_pinned,
+    };
+
     let config = ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(AcceptAnyServerCert))
+        .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
-    Arc::new(config)
+    Ok(Arc::new(config))
 }
 
 #[derive(Debug, Deserialize)]

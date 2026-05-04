@@ -22,7 +22,9 @@
 //! double-submit. Text editing in form fields is still allowed during the
 //! build phase (the build thread has already captured the values).
 
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -31,7 +33,7 @@ use hjkl_form::{
     TextFieldEditor, Validator,
 };
 use hjkl_ratatui::form::{FormPalette, draw_form};
-use hodl_config::Config;
+use hodl_config::{Config, KnownHosts};
 use hodl_core::{Address, Amount, ChainId, FeeRate};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -179,6 +181,8 @@ struct BroadcastPayload {
     account: u32,
     send_params: hodl_core::SendParams,
     prepared: PreparedSend,
+    known_hosts: Arc<Mutex<KnownHosts>>,
+    data_root: PathBuf,
 }
 
 // ── State machine ──────────────────────────────────────────────────────────
@@ -202,10 +206,19 @@ pub struct SendState {
     form: Form,
     phase: Phase,
     config: Config,
+    known_hosts: Arc<Mutex<KnownHosts>>,
+    data_root: PathBuf,
 }
 
 impl SendState {
-    pub fn new(chain: ChainId, account: u32, total_balance_sats: u64, config: Config) -> Self {
+    pub fn new(
+        chain: ChainId,
+        account: u32,
+        total_balance_sats: u64,
+        config: Config,
+        known_hosts: Arc<Mutex<KnownHosts>>,
+        data_root: PathBuf,
+    ) -> Self {
         let form = make_send_form(chain, total_balance_sats);
         Self {
             chain,
@@ -214,6 +227,8 @@ impl SendState {
             form,
             phase: Phase::Form,
             config,
+            known_hosts,
+            data_root,
         }
     }
 
@@ -404,6 +419,8 @@ impl SendState {
             amount,
             fee: FeeRate::SatsPerVbyte { sats: 1, chain }, // placeholder; overwritten in thread
         };
+        let known_hosts = Arc::clone(&self.known_hosts);
+        let data_root = self.data_root.clone();
 
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -421,6 +438,8 @@ impl SendState {
                 custom_fee_sats,
                 rbf,
                 chain_cfg.gap_limit,
+                &known_hosts,
+                &data_root,
             );
             seed.zeroize();
             let _ = tx.send(result);
@@ -444,11 +463,13 @@ fn build_thread(
     custom_fee_sats: Option<u64>,
     rbf: bool,
     gap_limit: u32,
+    known_hosts: &Arc<Mutex<KnownHosts>>,
+    data_root: &std::path::Path,
 ) -> Result<BroadcastPayload, String> {
     debug!("build_thread for chain {:?}", chain);
 
-    let active =
-        ActiveChain::from_chain_id(chain, config).map_err(|e| format!("chain connect: {e}"))?;
+    let active = ActiveChain::from_chain_id(chain, config, known_hosts, data_root)
+        .map_err(|e| format!("chain connect: {e}"))?;
 
     let fee_rate = if let Some(sats) = custom_fee_sats {
         FeeRate::SatsPerVbyte { sats, chain }
@@ -473,6 +494,8 @@ fn build_thread(
         account,
         send_params,
         prepared,
+        known_hosts: Arc::clone(known_hosts),
+        data_root: data_root.to_path_buf(),
     })
 }
 
@@ -487,7 +510,12 @@ fn broadcast_thread(mut payload: BroadcastPayload) -> Result<String, String> {
     // `prepared` consumes by value; once it's moved into sign_and_broadcast we
     // can't unwind back to a "still have it" state. Zeroize after the call
     // returns regardless of success/failure.
-    let active = match ActiveChain::from_chain_id(payload.chain, &payload.config) {
+    let active = match ActiveChain::from_chain_id(
+        payload.chain,
+        &payload.config,
+        &payload.known_hosts,
+        &payload.data_root,
+    ) {
         Ok(a) => a,
         Err(e) => {
             payload.seed.zeroize();

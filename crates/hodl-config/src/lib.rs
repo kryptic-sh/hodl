@@ -6,7 +6,9 @@
 mod address_book;
 mod config;
 mod error;
+mod known_hosts;
 
 pub use address_book::{AddressBook, Contact};
 pub use config::{ChainConfig, Config, Endpoint, KdfPreset, LockConfig, TorConfig};
 pub use error::ConfigError;
+pub use known_hosts::{KnownHosts, fingerprint_sha256};

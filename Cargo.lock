@@ -1165,9 +1165,11 @@ dependencies = [
 name = "hodl-config"
 version = "0.3.0"
 dependencies = [
+ "hex",
  "hjkl-config",
  "hodl-core",
  "serde",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
  "toml",

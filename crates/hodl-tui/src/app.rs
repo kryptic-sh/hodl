@@ -5,6 +5,7 @@
 //! Re-entering Lock from any screen is a re-lock, not a quit.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -12,7 +13,7 @@ use crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 
-use hodl_config::{AddressBook, Config};
+use hodl_config::{AddressBook, Config, KnownHosts};
 use hodl_core::ChainId;
 use hodl_wallet::{UnlockedWallet, Wallet};
 
@@ -55,6 +56,8 @@ pub struct App {
     clipboard: ClipboardHandle,
     /// Contextual help overlay; drawn on top of the active screen when `Some`.
     help_overlay: Option<HelpOverlay>,
+    /// TOFU cert pin store shared across all scan and send threads.
+    known_hosts: Arc<Mutex<KnownHosts>>,
     /// Stashed AccountState while the Addresses sub-view is open.
     /// Preserves the cached WalletScan so re-entering Accounts does not
     /// trigger a fresh network round-trip.
@@ -67,6 +70,7 @@ impl App {
         let config = load_config(&data_root);
         let idle_timeout = idle_timeout_from_config(&config);
         let clipboard = ClipboardHandle::new()?;
+        let known_hosts = load_known_hosts(&data_root);
         Ok(Self {
             data_root,
             wallet: Some(wallet),
@@ -77,6 +81,7 @@ impl App {
             last_activity: Instant::now(),
             clipboard,
             help_overlay: None,
+            known_hosts,
             accounts_stash: None,
         })
     }
@@ -85,6 +90,7 @@ impl App {
         let config = load_config(&data_root);
         let idle_timeout = idle_timeout_from_config(&config);
         let clipboard = ClipboardHandle::new()?;
+        let known_hosts = load_known_hosts(&data_root);
         let ob_state = OnboardingState::new(OnboardingMode::Create, data_root.clone(), wallet_name);
         Ok(Self {
             data_root,
@@ -96,6 +102,7 @@ impl App {
             last_activity: Instant::now(),
             clipboard,
             help_overlay: None,
+            known_hosts,
             accounts_stash: None,
         })
     }
@@ -104,6 +111,7 @@ impl App {
         let config = load_config(&data_root);
         let idle_timeout = idle_timeout_from_config(&config);
         let clipboard = ClipboardHandle::new()?;
+        let known_hosts = load_known_hosts(&data_root);
         let ob_state =
             OnboardingState::new(OnboardingMode::Restore, data_root.clone(), wallet_name);
         Ok(Self {
@@ -116,6 +124,7 @@ impl App {
             last_activity: Instant::now(),
             clipboard,
             help_overlay: None,
+            known_hosts,
             accounts_stash: None,
         })
     }
@@ -129,6 +138,7 @@ impl App {
         let wallet = Wallet::open(&data_root, &wallet_name)?;
         let config = load_config(&data_root);
         let clipboard = ClipboardHandle::new()?;
+        let known_hosts = load_known_hosts(&data_root);
         Ok(Self {
             data_root,
             wallet: Some(wallet),
@@ -139,6 +149,7 @@ impl App {
             last_activity: Instant::now(),
             clipboard,
             help_overlay: None,
+            known_hosts,
             accounts_stash: None,
         })
     }
@@ -378,6 +389,8 @@ impl App {
                                 account,
                                 total_balance_sats,
                                 self.config.clone(),
+                                Arc::clone(&self.known_hosts),
+                                self.data_root.clone(),
                             );
                             self.screen = Screen::Send(Box::new(send_state));
                         }
@@ -728,7 +741,11 @@ impl App {
     }
 
     fn make_accounts(&self) -> AccountState {
-        AccountState::new(self.data_root.clone(), self.config.clone())
+        AccountState::new(
+            self.data_root.clone(),
+            self.config.clone(),
+            Arc::clone(&self.known_hosts),
+        )
     }
 
     fn do_lock(&mut self) {
@@ -742,6 +759,13 @@ impl App {
 fn load_config(data_root: &Path) -> Config {
     let path = Config::default_path().unwrap_or_else(|_| data_root.join("config.toml"));
     Config::load(&path).unwrap_or_default()
+}
+
+/// Load the TOFU known-hosts store from `<data_root>/known_hosts.toml`.
+/// Returns an empty default if the file is missing. Never writes to disk.
+fn load_known_hosts(data_root: &Path) -> Arc<Mutex<KnownHosts>> {
+    let kh = KnownHosts::load(data_root).unwrap_or_default();
+    Arc::new(Mutex::new(kh))
 }
 
 /// Derive idle timeout from config. Falls back to `DEFAULT_IDLE_TIMEOUT`.
