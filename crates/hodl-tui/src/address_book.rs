@@ -112,7 +112,7 @@ impl AddressBookState {
         }
     }
 
-    fn move_selection(&mut self, delta: i32) {
+    pub(crate) fn move_selection(&mut self, delta: i32) {
         if self.book.entries.is_empty() {
             return;
         }

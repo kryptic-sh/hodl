@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -71,7 +72,11 @@ where
 {
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    // EnableMouseCapture so the TUI can handle scroll events directly and clamp
+    // them to one row per tick, instead of letting the terminal emulator
+    // translate wheel ticks into repeated arrow-key sequences (which vary in
+    // speed across terminals and can jump multiple rows per wheel click).
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     // Wipe the alt-screen buffer before the first draw — some terminals
@@ -83,7 +88,11 @@ where
     let result = f(&mut terminal);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     result

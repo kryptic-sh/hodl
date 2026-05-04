@@ -143,7 +143,7 @@ impl AccountState {
         self.rows.get(idx).map(|r| &r.address)
     }
 
-    fn move_selection(&mut self, delta: i32) {
+    pub(crate) fn move_selection(&mut self, delta: i32) {
         if self.rows.is_empty() {
             return;
         }

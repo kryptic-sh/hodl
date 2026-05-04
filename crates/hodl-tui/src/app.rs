@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 
@@ -229,6 +229,18 @@ impl App {
                         continue;
                     }
 
+                    // Mouse scroll on the accounts table: one row per event,
+                    // regardless of the OS-level scroll delta. Each
+                    // ScrollUp/ScrollDown crossterm event maps to exactly one
+                    // move_selection call so wheel speed cannot jump multiple rows.
+                    if let (Event::Mouse(m), Screen::Accounts(s)) = (&ev, &mut self.screen) {
+                        match m.kind {
+                            MouseEventKind::ScrollUp => s.move_selection(-1),
+                            MouseEventKind::ScrollDown => s.move_selection(1),
+                            _ => {}
+                        }
+                    }
+
                     let action = match &mut self.screen {
                         Screen::Accounts(s) => {
                             if let Event::Key(k) = ev {
@@ -336,6 +348,15 @@ impl App {
                             }
                         })?;
                         continue;
+                    }
+
+                    // Mouse scroll on the address book list: one row per event.
+                    if let (Event::Mouse(m), Screen::AddressBook(s)) = (&ev, &mut self.screen) {
+                        match m.kind {
+                            MouseEventKind::ScrollUp => s.move_selection(-1),
+                            MouseEventKind::ScrollDown => s.move_selection(1),
+                            _ => {}
+                        }
                     }
 
                     let action = match &mut self.screen {

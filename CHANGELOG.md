@@ -13,6 +13,12 @@ and this project adheres to
 - **Vault unlock no longer freezes the TUI** — argon2id KDF runs on a background
   thread; the lock screen shows a `decrypting… ⠋` spinner during the ~1–2 s wait
   instead of hanging with no feedback.
+- **Mouse wheel now scrolls one row per tick** on the accounts table and address
+  book list — previously mouse capture was disabled, so the terminal emulator
+  translated wheel ticks into repeated arrow-key sequences whose speed varied
+  across terminals and could jump multiple rows per click. Mouse capture is now
+  enabled (`EnableMouseCapture` / `DisableMouseCapture`) and each
+  `ScrollUp`/`ScrollDown` event maps to exactly one `move_selection(±1)` call.
 
 ### Added
 
