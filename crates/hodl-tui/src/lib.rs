@@ -74,6 +74,11 @@ where
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    // Wipe the alt-screen buffer before the first draw — some terminals
+    // (kitty, wezterm) don't fully clear it on EnterAlternateScreen, and
+    // ratatui's diff renderer only repaints changed cells, so prior shell
+    // scrollback bleeds through any blank widget background.
+    terminal.clear()?;
 
     let result = f(&mut terminal);
 
