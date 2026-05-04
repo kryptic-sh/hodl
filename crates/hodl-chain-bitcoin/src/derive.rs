@@ -43,12 +43,12 @@ fn path_str(purpose: u32, coin: u32, account: u32, change: u32, index: u32) -> S
 /// | BitcoinCash | Bip44, 49 (→ CashAddr)    | BIP-84/86 not deployed on BCH        |
 /// | BitcoinSv   | Bip44 only                | bech32/segwit not deployed on BSV    |
 /// | ECash       | Bip44, 49 (→ CashAddr)    | BIP-84/86 not deployed on XEC        |
-/// | Navio       | Bip44, 49, 84             | segwit deployed; no taproot on NAVIO |
+/// | NavCoin     | Bip44, 49, 84             | segwit deployed; no taproot on NAV   |
 /// | others      | all (pass-through)        | Unknown derivative — no restriction  |
 fn validate_purpose(purpose: Purpose, params: &NetworkParams) -> Result<()> {
     let chain = params.chain_id;
     let ok = match chain {
-        ChainId::Litecoin | ChainId::Navio => {
+        ChainId::Litecoin | ChainId::NavCoin => {
             matches!(purpose, Purpose::Bip44 | Purpose::Bip49 | Purpose::Bip84)
         }
         ChainId::Dogecoin | ChainId::BitcoinSv => matches!(purpose, Purpose::Bip44),
@@ -411,16 +411,16 @@ mod tests {
         assert!(result.is_err(), "BIP-86 must be rejected on XEC");
     }
 
-    // --- M7.5: Navio (NAVIO) tests ---
+    // --- NavCoin (NAV) tests ---
 
-    /// NAVIO P2PKH — m/44'/130'/0'/0/0 must start with "N" (0x35 prefix).
+    /// NAV P2PKH — m/44'/130'/0'/0/0 must start with "N" (0x35 prefix).
     #[test]
-    fn navio_p2pkh_prefix() {
+    fn navcoin_p2pkh_prefix() {
         let seed = seed_bytes();
         let addr = derive_address(
             &seed,
             Purpose::Bip44,
-            &NetworkParams::NAVIO_MAINNET,
+            &NetworkParams::NAVCOIN_MAINNET,
             0,
             0,
             0,
@@ -428,41 +428,41 @@ mod tests {
         .unwrap();
         assert!(
             addr.starts_with('N'),
-            "NAVIO P2PKH must start with 'N', got {addr}"
+            "NAV P2PKH must start with 'N', got {addr}"
         );
     }
 
-    /// NAVIO P2WPKH (BIP-84) — m/84'/130'/0'/0/0 must start with "navio1q".
+    /// NAV P2WPKH (BIP-84) — m/84'/130'/0'/0/0 must start with "nav1q".
     #[test]
-    fn navio_p2wpkh_prefix() {
+    fn navcoin_p2wpkh_prefix() {
         let seed = seed_bytes();
         let addr = derive_address(
             &seed,
             Purpose::Bip84,
-            &NetworkParams::NAVIO_MAINNET,
+            &NetworkParams::NAVCOIN_MAINNET,
             0,
             0,
             0,
         )
         .unwrap();
         assert!(
-            addr.starts_with("navio1q"),
-            "NAVIO P2WPKH must start with 'navio1q', got {addr}"
+            addr.starts_with("nav1q"),
+            "NAV P2WPKH must start with 'nav1q', got {addr}"
         );
     }
 
-    /// NAVIO does not support BIP-86 (taproot not deployed on Navio).
+    /// NAV does not support BIP-86 (taproot not deployed on NavCoin).
     #[test]
-    fn navio_bip86_rejected() {
+    fn navcoin_bip86_rejected() {
         let seed = seed_bytes();
         let result = derive_address(
             &seed,
             Purpose::Bip86,
-            &NetworkParams::NAVIO_MAINNET,
+            &NetworkParams::NAVCOIN_MAINNET,
             0,
             0,
             0,
         );
-        assert!(result.is_err(), "BIP-86 must be rejected on NAVIO");
+        assert!(result.is_err(), "BIP-86 must be rejected on NAV");
     }
 }

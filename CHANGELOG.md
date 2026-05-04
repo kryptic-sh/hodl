@@ -8,6 +8,16 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING:** rename `ChainId::Navio` → `ChainId::NavCoin` (ticker `NAV`,
+  display "NavCoin"). What v0.2.0 shipped as "Navio" was actually NavCoin
+  network params (P2PKH prefix 0x35 → "N", SLIP-44 130). Bech32 HRP corrected
+  from `"navio"` to `"nav"`. Default Electrum ports moved to 40001 / 40002 to
+  match upstream electrumx-NAV. `NetworkParams::NAVIO_MAINNET` →
+  `NAVCOIN_MAINNET`. The newer **Navio** chain (Navio-project, distinct fork) is
+  deferred to a future release as a sibling `NetworkParams` record.
+
 ## [0.2.0] - 2026-05-04
 
 End-to-end M2 → M8 release. Ships read + send for Bitcoin and Ethereum, read for

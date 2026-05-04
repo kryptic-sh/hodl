@@ -104,20 +104,20 @@ impl NetworkParams {
         default_electrum_tls_port: 50002,
     };
 
-    /// Navio (NAVIO) mainnet. Bitcoin-derivative chain with segwit support.
+    /// NavCoin (NAV) mainnet. Bitcoin-derivative chain with native segwit.
     ///
-    /// Public NAVIO uses standard P2PKH + bech32 P2WPKH. BIP-44/49/84 are
-    /// supported. BIP-86 (taproot) is not deployed on Navio. The xNAV blsCT
-    /// shielded spend module is explicitly post-v1 and not implemented here.
+    /// Standard P2PKH + bech32 P2WPKH; BIP-44/49/84 supported. BIP-86
+    /// (taproot) not deployed. NavCoin's blsCT-based xNAV shielded spends
+    /// are explicitly post-v1 — receive only via this path.
     ///
-    /// Prefix bytes carry over from legacy NavCoin; verify against a live
-    /// Electrum-Navio server on first integration — adjust if needed.
-    pub const NAVIO_MAINNET: Self = Self {
-        chain_id: ChainId::Navio,
-        bech32_hrp: "navio",
-        p2pkh_prefix: 0x35, // "N" addresses (legacy NavCoin prefix)
+    /// Endpoints: Electrum-NavCoin servers (default ports 40001 / 40002 per
+    /// upstream electrumx-NAV; verify on first integration).
+    pub const NAVCOIN_MAINNET: Self = Self {
+        chain_id: ChainId::NavCoin,
+        bech32_hrp: "nav",
+        p2pkh_prefix: 0x35, // "N" addresses
         p2sh_prefix: 0x55,  // "X" addresses
-        default_electrum_port: 50001,
-        default_electrum_tls_port: 50002,
+        default_electrum_port: 40001,
+        default_electrum_tls_port: 40002,
     };
 }

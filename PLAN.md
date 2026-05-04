@@ -36,13 +36,13 @@ overlap with already-implemented code, and light-wallet protocol availability.
 
 ### Tier 1 — first cut
 
-| Chain           | Symbol | SLIP-44 | Light protocol                         | Notes                                                           |
-| --------------- | ------ | ------- | -------------------------------------- | --------------------------------------------------------------- |
-| Bitcoin         | BTC    | 0       | Electrum protocol (1.4) / BIP-157/158  | Reference impl. P2PKH + P2SH + bech32 + taproot.                |
-| Ethereum        | ETH    | 60      | JSON-RPC (Infura / Alchemy / Ankr / …) | EIP-155 chain id. EIP-1559 fee market.                          |
-| BNB Smart Chain | BNB    | 60      | JSON-RPC, EVM-compatible               | Reuses ETH derivation + signer. Chain id 56.                    |
-| Monero          | XMR    | 128     | LWS (light-wallet server) protocol     | View-key sync via remote node. Send via own node API.           |
-| Navio           | NAVIO  | 130     | ElectrumX (Electrum-Navio servers)     | Bitcoin-derivative codebase, PoS. xNAV privacy token via blsCT. |
+| Chain           | Symbol | SLIP-44 | Light protocol                         | Notes                                                            |
+| --------------- | ------ | ------- | -------------------------------------- | ---------------------------------------------------------------- |
+| Bitcoin         | BTC    | 0       | Electrum protocol (1.4) / BIP-157/158  | Reference impl. P2PKH + P2SH + bech32 + taproot.                 |
+| Ethereum        | ETH    | 60      | JSON-RPC (Infura / Alchemy / Ankr / …) | EIP-155 chain id. EIP-1559 fee market.                           |
+| BNB Smart Chain | BNB    | 60      | JSON-RPC, EVM-compatible               | Reuses ETH derivation + signer. Chain id 56.                     |
+| Monero          | XMR    | 128     | LWS (light-wallet server) protocol     | View-key sync via remote node. Send via own node API.            |
+| NavCoin         | NAV    | 130     | ElectrumX (Electrum-NavCoin servers)   | Bitcoin-derivative, PoS. xNAV privacy token via blsCT (post-v1). |
 
 ### Tier 2 — Bitcoin-derivative chains, by market cap
 
@@ -173,9 +173,14 @@ pub trait Chain {
 
 The Bitcoin-family crate parameterizes a single implementation by network
 constants (magic bytes, address HRP, dust limit, default port), so adding
-Litecoin / Doge / BCH / BSV / BTG / XEC / Navio after BTC works is mostly a
-config record + endpoint list. Navio's blsCT-based xNAV privacy spends are the
-one exception — they need a dedicated module on top of the base UTXO codec.
+Litecoin / Doge / BCH / BSV / BTG / XEC / NavCoin after BTC works is mostly a
+config record + endpoint list. NavCoin's blsCT-based xNAV privacy spends are the
+one exception — they need a dedicated module on top of the base UTXO codec
+(post-v1).
+
+The newer **Navio** chain (Navio-project, distinct from legacy NavCoin) is
+deferred — when its prefix bytes / HRP / xNAV variant stabilize we'll add a
+second `NetworkParams` record alongside `NAVCOIN_MAINNET`.
 
 ## Light-Wallet Backends
 
@@ -189,7 +194,7 @@ own node in `config.toml`.
 | Ethereum | JSON-RPC                 | Provider sees address queries. Multi-provider rotation reduces signal.                         |
 | BSC      | JSON-RPC                 | Same as ETH. Default to public RPC, Ankr fallback.                                             |
 | Monero   | LWS (open-monero-server) | Server learns view key in plaintext under naive setup. Default = self-host.                    |
-| Navio    | ElectrumX                | Public spends like Bitcoin. xNAV (blsCT) spends shielded — server sees commitment, not amount. |
+| NavCoin  | ElectrumX                | Public spends like Bitcoin. xNAV (blsCT) spends shielded — server sees commitment, not amount. |
 
 ## Storage Layout
 
@@ -311,9 +316,10 @@ widget code in `hodl-tui` for form chrome.
   XEC).
 - **M7 — Monero.** BIP-39 → Ledger-compat derivation, view-key sync via LWS,
   send via own-node JSON-RPC.
-- **M7.5 — Navio.** Public NAVIO via the Bitcoin-family path (constants record +
-  Electrum-Navio endpoints). xNAV blsCT shielded spends as a follow-up module —
-  receive only at first, full send post-v1.
+- **M7.5 — NavCoin.** Public NAV via the Bitcoin-family path (constants record
+  - Electrum-NavCoin endpoints). xNAV blsCT shielded spends as a follow-up
+    module — receive only at first, full send post-v1. The newer **Navio** chain
+    (separate project) lands later as a sibling `NetworkParams` record.
 - **M8 — polish.** Tor toggle, address book, multi-wallet switcher, optional
   price feed, packaged binaries (deb / brew tap / scoop).
 

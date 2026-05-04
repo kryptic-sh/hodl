@@ -12,7 +12,7 @@ pub enum ChainId {
     BitcoinCash,
     BitcoinSv,
     ECash,
-    Navio,
+    NavCoin,
     Ethereum,
     BscMainnet,
     Monero,
@@ -28,8 +28,8 @@ impl ChainId {
             ChainId::BitcoinCash => 145,
             ChainId::BitcoinSv => 236,
             ChainId::ECash => 1899,
-            // Navio uses coin_type 130 per SLIP-44 (was NavCoin)
-            ChainId::Navio => 130,
+            // NavCoin: SLIP-44 130 (NAV).
+            ChainId::NavCoin => 130,
             ChainId::Ethereum => 60,
             // BSC reuses ETH derivation; coin_type 60 per BEP-44 convention
             ChainId::BscMainnet => 60,
@@ -46,7 +46,7 @@ impl ChainId {
             ChainId::BitcoinCash => "Bitcoin Cash",
             ChainId::BitcoinSv => "Bitcoin SV",
             ChainId::ECash => "eCash",
-            ChainId::Navio => "Navio",
+            ChainId::NavCoin => "NavCoin",
             ChainId::Ethereum => "Ethereum",
             ChainId::BscMainnet => "BNB Smart Chain",
             ChainId::Monero => "Monero",
@@ -62,7 +62,7 @@ impl ChainId {
             ChainId::BitcoinCash => "BCH",
             ChainId::BitcoinSv => "BSV",
             ChainId::ECash => "XEC",
-            ChainId::Navio => "NAVIO",
+            ChainId::NavCoin => "NAV",
             ChainId::Ethereum => "ETH",
             ChainId::BscMainnet => "BNB",
             ChainId::Monero => "XMR",
