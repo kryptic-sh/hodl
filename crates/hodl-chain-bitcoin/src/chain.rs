@@ -7,12 +7,57 @@ use hodl_core::{
 };
 
 use crate::derive::{Purpose, derive_address, derive_xprv};
-use crate::electrum::{ElectrumClient, Utxo, p2wpkh_scripthash};
+use crate::electrum::{ElectrumClient, Utxo, p2pkh_scripthash, p2wpkh_scripthash};
 use crate::network::NetworkParams;
 use crate::psbt::{
     Outpoint, TxInput, TxOutput, build_psbt, decode_p2wpkh_address, estimate_vsize, hash160,
-    p2wpkh_script, select_coins, sign_inputs,
+    p2pkh_script, p2wpkh_script, select_coins, sign_inputs, sign_inputs_legacy_p2pkh,
 };
+
+/// Decode a recipient address string to a scriptPubKey for the given purpose.
+///
+/// - Bip84 / Bip86: bech32 P2WPKH.
+/// - Bip44: base58check P2PKH or CashAddr P2PKH for BCH.
+/// - Bip49: returns an error (not yet implemented).
+fn decode_address_to_script(addr: &str, purpose: Purpose) -> Result<Vec<u8>> {
+    match purpose {
+        Purpose::Bip84 | Purpose::Bip86 => {
+            let hash = decode_p2wpkh_address(addr)?;
+            Ok(p2wpkh_script(&hash))
+        }
+        Purpose::Bip44 => {
+            // CashAddr (BCH): contains a colon.
+            if addr.contains(':') {
+                let h160 = crate::cashaddr::decode_p2pkh_cashaddr(addr)
+                    .map_err(|e| Error::Codec(format!("cashaddr decode: {e}")))?;
+                return Ok(p2pkh_script(&h160));
+            }
+            // Legacy base58check P2PKH.
+            let decoded = bs58::decode(addr)
+                .with_check(None)
+                .into_vec()
+                .map_err(|e| Error::Codec(format!("base58 decode: {e}")))?;
+            if decoded.len() != 21 {
+                return Err(Error::Codec("P2PKH address must decode to 21 bytes".into()));
+            }
+            let mut h160 = [0u8; 20];
+            h160.copy_from_slice(&decoded[1..]);
+            Ok(p2pkh_script(&h160))
+        }
+        Purpose::Bip49 => Err(Error::Chain(
+            "BIP-49 wrapped segwit send not yet implemented".into(),
+        )),
+    }
+}
+
+/// Build the scriptPubKey for a change output matching the given purpose.
+fn purpose_script(purpose: Purpose, pubkey_hash: &[u8; 20]) -> Vec<u8> {
+    match purpose {
+        Purpose::Bip84 | Purpose::Bip86 => p2wpkh_script(pubkey_hash),
+        Purpose::Bip44 => p2pkh_script(pubkey_hash),
+        Purpose::Bip49 => p2wpkh_script(pubkey_hash), // fallback; gated above
+    }
+}
 
 /// BIP-125 RBF sequence value — signals opt-in replace-by-fee.
 pub const SEQUENCE_RBF: u32 = 0xffff_fffd;
@@ -47,10 +92,11 @@ pub struct BitcoinChain {
 
 impl BitcoinChain {
     pub fn new(params: NetworkParams, electrum: ElectrumClient) -> Self {
+        let purpose = Self::default_send_purpose(params.chain_id);
         Self {
             params,
             electrum: RefCell::new(electrum),
-            purpose: Purpose::Bip84,
+            purpose,
         }
     }
 
@@ -59,21 +105,50 @@ impl BitcoinChain {
         self
     }
 
+    /// Returns the default derivation purpose for this chain's send path.
+    ///
+    /// - Bip44 (legacy P2PKH) for DOGE and BCH — segwit not deployed.
+    /// - Bip84 (native segwit P2WPKH) for everything else in the BTC family.
+    pub fn default_send_purpose(chain_id: ChainId) -> Purpose {
+        match chain_id {
+            ChainId::Dogecoin | ChainId::BitcoinCash => Purpose::Bip44,
+            _ => Purpose::Bip84,
+        }
+    }
+
     /// Compute the Electrum scripthash for an address string.
     ///
-    /// Only supports bech32 P2WPKH for now; the full UTXO path is PE scope.
+    /// Supports bech32 P2WPKH, legacy P2PKH (base58check), and CashAddr P2PKH.
     fn scripthash_for(&self, addr: &Address) -> Result<String> {
         let s = addr.as_str();
-        // Decode bech32 witness program to get the pubkey hash.
-        let (_, witness_ver, prog) =
-            bech32::segwit::decode(s).map_err(|e| Error::Codec(format!("bech32 decode: {e}")))?;
-        if witness_ver == bech32::segwit::VERSION_0 && prog.len() == 20 {
+
+        // Try bech32 segwit (P2WPKH, witness v0).
+        if let Ok((_, witness_ver, prog)) = bech32::segwit::decode(s)
+            && witness_ver == bech32::segwit::VERSION_0
+            && prog.len() == 20
+        {
             let h160: [u8; 20] = prog.try_into().unwrap();
             return Ok(p2wpkh_scripthash(&h160));
         }
-        Err(Error::Chain(
-            "scripthash computation for non-P2WPKH addresses not yet implemented".into(),
-        ))
+
+        // Try CashAddr P2PKH (BCH): prefix is "bitcoincash:q..."
+        if s.contains(':')
+            && let Ok(h160) = crate::cashaddr::decode_p2pkh_cashaddr(s)
+        {
+            return Ok(p2pkh_scripthash(&h160));
+        }
+
+        // Try legacy P2PKH base58check (BTC/LTC/DOGE/NAV "D"/"L"/"N"/"1" addresses).
+        if let Ok(decoded) = bs58::decode(s).with_check(None).into_vec()
+            && decoded.len() == 21
+        {
+            let h160: [u8; 20] = decoded[1..].try_into().unwrap();
+            return Ok(p2pkh_scripthash(&h160));
+        }
+
+        Err(Error::Chain(format!(
+            "scripthash computation failed for address: {s}"
+        )))
     }
 
     /// Fetch UTXOs for a bech32 P2WPKH address.
@@ -348,23 +423,33 @@ impl BitcoinChain {
             key_bytes_vec.push(kb);
         }
 
-        let recipient_hash = decode_p2wpkh_address(params.to.as_str())?;
+        let recipient_script = decode_address_to_script(params.to.as_str(), self.purpose)?;
         let mut tx_outputs: Vec<TxOutput> = Vec::with_capacity(n_out);
         tx_outputs.push(TxOutput {
-            script_pubkey: p2wpkh_script(&recipient_hash),
+            script_pubkey: recipient_script,
             value_sats: amount_sats,
         });
         if change_sats > 0 {
             let change_xprv = derive_xprv(seed, self.purpose, &self.params, account, 1, 0)?;
             let change_pubkey: [u8; 33] = change_xprv.public_key().to_bytes();
             let change_hash = hash160(&change_pubkey);
+            let change_script = purpose_script(self.purpose, &change_hash);
             tx_outputs.push(TxOutput {
-                script_pubkey: p2wpkh_script(&change_hash),
+                script_pubkey: change_script,
                 value_sats: change_sats,
             });
         }
 
-        let signed_bytes = sign_inputs(&tx_inputs, &tx_outputs, &key_bytes_vec)?;
+        let signed_bytes = if matches!(self.purpose, Purpose::Bip44) {
+            sign_inputs_legacy_p2pkh(
+                self.params.chain_id,
+                &tx_inputs,
+                &tx_outputs,
+                &key_bytes_vec,
+            )?
+        } else {
+            sign_inputs(&tx_inputs, &tx_outputs, &key_bytes_vec)?
+        };
         Ok(SignedTx {
             chain: self.params.chain_id,
             raw: signed_bytes,
@@ -697,5 +782,34 @@ mod chain_tests {
         let seq_start = 4 + 2 + 1 + 36 + 1;
         let seq = u32::from_le_bytes(signed[seq_start..seq_start + 4].try_into().unwrap());
         assert_eq!(seq, SEQUENCE_RBF, "first input must carry RBF sequence");
+    }
+
+    /// `default_send_purpose` returns the correct purpose for each chain.
+    #[test]
+    fn default_send_purpose_per_chain() {
+        assert_eq!(
+            BitcoinChain::default_send_purpose(ChainId::Bitcoin),
+            Purpose::Bip84
+        );
+        assert_eq!(
+            BitcoinChain::default_send_purpose(ChainId::BitcoinTestnet),
+            Purpose::Bip84
+        );
+        assert_eq!(
+            BitcoinChain::default_send_purpose(ChainId::Litecoin),
+            Purpose::Bip84
+        );
+        assert_eq!(
+            BitcoinChain::default_send_purpose(ChainId::NavCoin),
+            Purpose::Bip84
+        );
+        assert_eq!(
+            BitcoinChain::default_send_purpose(ChainId::Dogecoin),
+            Purpose::Bip44
+        );
+        assert_eq!(
+            BitcoinChain::default_send_purpose(ChainId::BitcoinCash),
+            Purpose::Bip44
+        );
     }
 }

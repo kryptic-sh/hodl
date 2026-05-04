@@ -10,6 +10,27 @@ and this project adheres to
 
 ### Added
 
+- **Legacy P2PKH signing** in `hodl-chain-bitcoin`: pre-segwit sighash for
+  BTC-family chains (DOGE, NAV-via-Bip44, LTC-via-Bip44) plus BCH's
+  BIP-143-shaped FORKID sighash (SIGHASH_ALL | SIGHASH_FORKID = 0x41). New
+  helpers: `legacy_p2pkh_sighash`, `bch_sighash`, `compute_sighash` dispatcher,
+  `p2pkh_script_sig`, `p2pkh_script`, legacy tx serialization
+  (`serialize_unsigned_tx_legacy`, `serialize_signed_tx_legacy`) with no segwit
+  marker/flag and a scriptSig per input. `sign_inputs_legacy_p2pkh` orchestrates
+  per-input signing into a final non-segwit transaction.
+- `BitcoinChain::default_send_purpose(chain_id)` picks the right derivation
+  purpose per chain: `Bip44` for DOGE and BCH (segwit not deployed); `Bip84` for
+  everything else in the BTC family.
+- `cashaddr::decode_p2pkh_cashaddr` — decode a CashAddr P2PKH address to its
+  20-byte pubkey hash (with checksum verification). Needed for BCH UTXO lookup
+  and recipient script construction.
+- `electrum::p2pkh_scripthash` — Electrum scripthash for a P2PKH scriptPubKey.
+  Enables UTXO queries for legacy (base58check and CashAddr) addresses.
+- `BitcoinChain::scripthash_for` now handles bech32 P2WPKH, CashAddr P2PKH, and
+  legacy base58check P2PKH — all three address families used across the
+  BTC-chain family.
+- LTC / DOGE / BCH / NAV send dispatch in `active_chain.rs` is no longer gated —
+  every BTC-family chain has a working `build_send` / `sign_multi_source` path.
 - **Multi-source UTXO**: Bitcoin send now aggregates UTXOs across every funded
   address in the gap-scan, coin-selecting across the merged pool. Closes the
   v0.2.0 deferred item where wallets with funds spread over multiple derived
@@ -27,12 +48,12 @@ and this project adheres to
   when the chain picker flips selection — the picker is no longer decorative.
 - ETH send wired end-to-end through the TUI. Recipient validator switches to
   EIP-55 for Ethereum / BSC.
-- LTC / DOGE / BCH / NAV send paths exist in the chain crate but the TUI
-  `build_send` currently returns "not yet implemented" for them pending a
-  non-segwit PSBT signer (BTC + BTC-testnet are wired live).
 
 ### Changed
 
+- `BitcoinChain::new` defaults `purpose` per-chain via `default_send_purpose`
+  instead of always `Bip84`. Override via `with_purpose` if you need a
+  non-default path (e.g. Bip44 on LTC for legacy addresses).
 - Send TUI passes `(account, total_balance)` to the chain instead of a single
   `(address, index)` pair. Account screen rebinds Send accordingly.
 - `account::AccountAction::OpenSend` carries `chain: ChainId` so the Send screen

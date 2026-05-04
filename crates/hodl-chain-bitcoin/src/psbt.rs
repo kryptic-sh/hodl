@@ -1,7 +1,6 @@
 //! PSBT v0 (BIP-174) builder + BIP-143 segwit sighash + k256 ECDSA signing.
 //!
-//! Scope: segwit-v0 P2WPKH inputs and outputs only (BIP-84 wallets).
-//! Legacy / wrapped-segwit input signing is future work.
+//! Scope: segwit-v0 P2WPKH and legacy P2PKH (BIP-44) inputs and outputs.
 //!
 //! vsize estimate (all segwit-v0 P2WPKH):
 //!   overhead = 41 vB  (version 4B + segwit marker/flag 1/2B scale → 0.5B
@@ -15,10 +14,12 @@
 //! These constants are documented approximations suitable for fee estimation;
 //! the actual witness sizes can vary by a byte or two.
 
+use hodl_core::ChainId;
 use hodl_core::error::{Error, Result};
 use k256::ecdsa::{Signature, SigningKey, signature::hazmat::PrehashSigner};
 use sha2::{Digest, Sha256};
 
+use crate::derive::Purpose;
 use crate::electrum::Utxo;
 
 // ── vsize constants ────────────────────────────────────────────────────────
@@ -229,6 +230,298 @@ pub fn bip143_sighash(
     preimage.extend_from_slice(&sighash_type.to_le_bytes());
 
     dsha256(&preimage)
+}
+
+// ── P2PKH script builder ───────────────────────────────────────────────────
+
+/// Build a P2PKH scriptPubKey (25 bytes):
+/// OP_DUP OP_HASH160 <20> <hash> OP_EQUALVERIFY OP_CHECKSIG
+pub fn p2pkh_script(pubkey_hash: &[u8; 20]) -> Vec<u8> {
+    let mut s = Vec::with_capacity(25);
+    s.push(0x76); // OP_DUP
+    s.push(0xa9); // OP_HASH160
+    s.push(0x14); // push 20 bytes
+    s.extend_from_slice(pubkey_hash);
+    s.push(0x88); // OP_EQUALVERIFY
+    s.push(0xac); // OP_CHECKSIG
+    s
+}
+
+/// Build a P2PKH scriptSig: `<DER sig + sighash byte> <compressed pubkey>`.
+///
+/// Uses OP_PUSHBYTES_N for N ≤ 75, OP_PUSHDATA1 for 76–255.
+pub fn p2pkh_script_sig(sig_der: &[u8], sighash_byte: u8, pubkey: &[u8; 33]) -> Vec<u8> {
+    let mut sig_with_type = sig_der.to_vec();
+    sig_with_type.push(sighash_byte);
+
+    let mut out = Vec::new();
+    push_data(&mut out, &sig_with_type);
+    push_data(&mut out, pubkey);
+    out
+}
+
+fn push_data(buf: &mut Vec<u8>, data: &[u8]) {
+    let n = data.len();
+    if n <= 75 {
+        buf.push(n as u8); // OP_PUSHBYTES_N
+    } else {
+        buf.push(0x4c); // OP_PUSHDATA1
+        buf.push(n as u8);
+    }
+    buf.extend_from_slice(data);
+}
+
+// ── Legacy pre-segwit sighash ──────────────────────────────────────────────
+
+/// Pre-segwit sighash (BIP-16 era) for P2PKH inputs.
+///
+/// For input `input_index`, substitutes that input's prevout scriptPubKey
+/// (P2PKH script from `pubkey_hash`) into the scriptSig field and empties
+/// all other scriptSigs, serializes the modified tx, appends 4-byte LE
+/// sighash type, then double-SHA256s the result.
+pub fn legacy_p2pkh_sighash(
+    inputs: &[TxInput],
+    outputs: &[TxOutput],
+    input_index: usize,
+    sighash_type: u32,
+    version: u32,
+    locktime: u32,
+) -> [u8; 32] {
+    let mut tx = Vec::new();
+    tx.extend_from_slice(&version.to_le_bytes());
+    write_varint(&mut tx, inputs.len() as u64);
+    for (i, inp) in inputs.iter().enumerate() {
+        tx.extend_from_slice(&inp.outpoint.txid_bytes);
+        tx.extend_from_slice(&inp.outpoint.vout.to_le_bytes());
+        if i == input_index {
+            let script = p2pkh_script(&inp.pubkey_hash);
+            write_varint(&mut tx, script.len() as u64);
+            tx.extend_from_slice(&script);
+        } else {
+            tx.push(0x00); // empty scriptSig
+        }
+        tx.extend_from_slice(&inp.sequence.to_le_bytes());
+    }
+    write_varint(&mut tx, outputs.len() as u64);
+    for out in outputs {
+        tx.extend_from_slice(&out.value_sats.to_le_bytes());
+        write_varint(&mut tx, out.script_pubkey.len() as u64);
+        tx.extend_from_slice(&out.script_pubkey);
+    }
+    tx.extend_from_slice(&locktime.to_le_bytes());
+    tx.extend_from_slice(&sighash_type.to_le_bytes());
+    dsha256(&tx)
+}
+
+/// BCH replay-protected sighash (BIP-143-shaped, SIGHASH_ALL | SIGHASH_FORKID = 0x41).
+///
+/// Uses the same hashPrevouts / hashSequence / hashOutputs preimage structure
+/// as BIP-143 segwit but with sighash_type = 0x41 and the BCH FORKID baked in.
+pub fn bch_sighash(
+    inputs: &[TxInput],
+    outputs: &[TxOutput],
+    input_index: usize,
+    version: u32,
+    locktime: u32,
+) -> [u8; 32] {
+    let sighash_type: u32 = 0x41; // SIGHASH_ALL | SIGHASH_FORKID
+
+    let mut prev_buf = Vec::new();
+    for inp in inputs {
+        prev_buf.extend_from_slice(&inp.outpoint.txid_bytes);
+        prev_buf.extend_from_slice(&inp.outpoint.vout.to_le_bytes());
+    }
+    let hash_prevouts = dsha256(&prev_buf);
+
+    let mut seq_buf = Vec::new();
+    for inp in inputs {
+        seq_buf.extend_from_slice(&inp.sequence.to_le_bytes());
+    }
+    let hash_sequence = dsha256(&seq_buf);
+
+    let mut out_buf = Vec::new();
+    for out in outputs {
+        out_buf.extend_from_slice(&out.value_sats.to_le_bytes());
+        write_varint(&mut out_buf, out.script_pubkey.len() as u64);
+        out_buf.extend_from_slice(&out.script_pubkey);
+    }
+    let hash_outputs = dsha256(&out_buf);
+
+    let inp = &inputs[input_index];
+
+    // scriptCode for P2PKH: OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG
+    let mut script_code = Vec::with_capacity(26);
+    script_code.push(0x19); // varint length 25
+    script_code.push(0x76); // OP_DUP
+    script_code.push(0xa9); // OP_HASH160
+    script_code.push(0x14); // push 20 bytes
+    script_code.extend_from_slice(&inp.pubkey_hash);
+    script_code.push(0x88); // OP_EQUALVERIFY
+    script_code.push(0xac); // OP_CHECKSIG
+
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(&version.to_le_bytes());
+    preimage.extend_from_slice(&hash_prevouts);
+    preimage.extend_from_slice(&hash_sequence);
+    preimage.extend_from_slice(&inp.outpoint.txid_bytes);
+    preimage.extend_from_slice(&inp.outpoint.vout.to_le_bytes());
+    preimage.extend_from_slice(&script_code);
+    preimage.extend_from_slice(&inp.value_sats.to_le_bytes());
+    preimage.extend_from_slice(&inp.sequence.to_le_bytes());
+    preimage.extend_from_slice(&hash_outputs);
+    preimage.extend_from_slice(&locktime.to_le_bytes());
+    preimage.extend_from_slice(&sighash_type.to_le_bytes());
+
+    dsha256(&preimage)
+}
+
+/// Compute the right sighash for the chain + input shape.
+///
+/// Returns `(sighash_bytes, sighash_type_byte)`.
+///
+/// - Bip84 / Bip86 → BIP-143 segwit sighash, byte = 0x01.
+/// - Bip44 + BCH → BCH FORKID sighash, byte = 0x41.
+/// - Bip44 (other) → legacy P2PKH sighash, byte = 0x01.
+/// - Bip49 → returns an error (BIP-49 wrapped segwit signing not yet
+///   implemented for LTC/NAV; those chains default to Bip84 anyway).
+pub fn compute_sighash(
+    chain: ChainId,
+    purpose: Purpose,
+    inputs: &[TxInput],
+    outputs: &[TxOutput],
+    input_index: usize,
+    version: u32,
+    locktime: u32,
+) -> Result<([u8; 32], u8)> {
+    match purpose {
+        Purpose::Bip84 | Purpose::Bip86 => {
+            let hash = bip143_sighash(inputs, outputs, input_index, version, locktime);
+            Ok((hash, 0x01))
+        }
+        Purpose::Bip44 => {
+            if matches!(chain, ChainId::BitcoinCash) {
+                let hash = bch_sighash(inputs, outputs, input_index, version, locktime);
+                Ok((hash, 0x41))
+            } else {
+                let hash =
+                    legacy_p2pkh_sighash(inputs, outputs, input_index, 0x01, version, locktime);
+                Ok((hash, 0x01))
+            }
+        }
+        Purpose::Bip49 => Err(Error::Chain(
+            "BIP-49 wrapped segwit signing not yet implemented".into(),
+        )),
+    }
+}
+
+// ── Legacy tx serialization ────────────────────────────────────────────────
+
+/// Serialize an unsigned legacy (non-segwit) transaction.
+///
+/// No marker/flag bytes. Each input has an empty scriptSig (0x00 varint).
+pub fn serialize_unsigned_tx_legacy(
+    inputs: &[TxInput],
+    outputs: &[TxOutput],
+    version: u32,
+    locktime: u32,
+) -> Vec<u8> {
+    let mut tx = Vec::new();
+    tx.extend_from_slice(&version.to_le_bytes());
+    write_varint(&mut tx, inputs.len() as u64);
+    for inp in inputs {
+        tx.extend_from_slice(&inp.outpoint.txid_bytes);
+        tx.extend_from_slice(&inp.outpoint.vout.to_le_bytes());
+        tx.push(0x00); // empty scriptSig
+        tx.extend_from_slice(&inp.sequence.to_le_bytes());
+    }
+    write_varint(&mut tx, outputs.len() as u64);
+    for out in outputs {
+        tx.extend_from_slice(&out.value_sats.to_le_bytes());
+        write_varint(&mut tx, out.script_pubkey.len() as u64);
+        tx.extend_from_slice(&out.script_pubkey);
+    }
+    tx.extend_from_slice(&locktime.to_le_bytes());
+    tx
+}
+
+/// Serialize a fully-signed legacy (non-segwit) transaction.
+///
+/// No marker/flag bytes. No witness section. Each input carries its scriptSig.
+pub fn serialize_signed_tx_legacy(
+    inputs: &[TxInput],
+    outputs: &[TxOutput],
+    script_sigs: &[Vec<u8>],
+    version: u32,
+    locktime: u32,
+) -> Vec<u8> {
+    let mut tx = Vec::new();
+    tx.extend_from_slice(&version.to_le_bytes());
+    write_varint(&mut tx, inputs.len() as u64);
+    for (inp, script_sig) in inputs.iter().zip(script_sigs.iter()) {
+        tx.extend_from_slice(&inp.outpoint.txid_bytes);
+        tx.extend_from_slice(&inp.outpoint.vout.to_le_bytes());
+        write_varint(&mut tx, script_sig.len() as u64);
+        tx.extend_from_slice(script_sig);
+        tx.extend_from_slice(&inp.sequence.to_le_bytes());
+    }
+    write_varint(&mut tx, outputs.len() as u64);
+    for out in outputs {
+        tx.extend_from_slice(&out.value_sats.to_le_bytes());
+        write_varint(&mut tx, out.script_pubkey.len() as u64);
+        tx.extend_from_slice(&out.script_pubkey);
+    }
+    tx.extend_from_slice(&locktime.to_le_bytes());
+    tx
+}
+
+// ── Legacy signing ─────────────────────────────────────────────────────────
+
+/// Sign all inputs using legacy P2PKH (or BCH FORKID) and serialize as a
+/// non-segwit transaction (no marker/flag, scriptSig per input).
+pub fn sign_inputs_legacy_p2pkh(
+    chain: ChainId,
+    inputs: &[TxInput],
+    outputs: &[TxOutput],
+    keys: &[[u8; 32]],
+) -> Result<Vec<u8>> {
+    if keys.len() != inputs.len() {
+        return Err(Error::Chain(format!(
+            "key count {} != input count {}",
+            keys.len(),
+            inputs.len()
+        )));
+    }
+
+    let version = 1u32; // legacy tx version 1
+    let locktime = 0u32;
+    let purpose = Purpose::Bip44;
+
+    let mut script_sigs: Vec<Vec<u8>> = Vec::with_capacity(inputs.len());
+    for (i, key_bytes) in keys.iter().enumerate() {
+        let (sighash, sighash_byte) =
+            compute_sighash(chain, purpose, inputs, outputs, i, version, locktime)?;
+
+        let signing_key = SigningKey::from_bytes(key_bytes.into())
+            .map_err(|e| Error::Chain(format!("invalid signing key: {e}")))?;
+
+        let (sig, _recid): (Signature, _) = signing_key
+            .sign_prehash(sighash.as_ref())
+            .map_err(|e| Error::Chain(format!("ecdsa sign: {e}")))?;
+
+        let der = sig.to_der().to_bytes().to_vec();
+        let pubkey = signing_key.verifying_key().to_encoded_point(true);
+        let pubkey_bytes: [u8; 33] = pubkey.as_bytes().try_into().unwrap();
+
+        script_sigs.push(p2pkh_script_sig(&der, sighash_byte, &pubkey_bytes));
+    }
+
+    Ok(serialize_signed_tx_legacy(
+        inputs,
+        outputs,
+        &script_sigs,
+        version,
+        locktime,
+    ))
 }
 
 // ── PSBT v0 serialization ──────────────────────────────────────────────────
@@ -665,5 +958,171 @@ mod tests {
         let psbt = build_psbt(&[inp], &[out]).unwrap();
         // PSBT magic: "psbt" + 0xff
         assert_eq!(&psbt[..5], b"psbt\xff");
+    }
+
+    // ── Legacy P2PKH sighash tests ────────────────────────────────────────────
+
+    fn make_legacy_input(key_byte: u8) -> ([u8; 32], TxInput) {
+        let key_bytes = [key_byte; 32];
+        let signing_key = SigningKey::from_bytes((&key_bytes).into()).unwrap();
+        let pubkey: [u8; 33] = signing_key
+            .verifying_key()
+            .to_encoded_point(true)
+            .as_bytes()
+            .try_into()
+            .unwrap();
+        let pubkey_hash = hash160(&pubkey);
+        let inp = TxInput {
+            outpoint: Outpoint::from_str(&"aa".repeat(32), 0).unwrap(),
+            sequence: 0xffff_ffff,
+            value_sats: 100_000,
+            pubkey_hash,
+            pubkey,
+        };
+        (key_bytes, inp)
+    }
+
+    /// Self-consistency: sign legacy sighash + verify with k256 verifier.
+    #[test]
+    fn legacy_p2pkh_sighash_sign_and_verify() {
+        use k256::ecdsa::{VerifyingKey, signature::hazmat::PrehashVerifier};
+
+        let (key_bytes, inp) = make_legacy_input(0x50);
+        let out = TxOutput {
+            script_pubkey: p2pkh_script(&inp.pubkey_hash),
+            value_sats: 99_000,
+        };
+
+        let sighash = legacy_p2pkh_sighash(&[inp], &[out], 0, 0x01, 1, 0);
+
+        let signing_key = SigningKey::from_bytes((&key_bytes).into()).unwrap();
+        let (sig, _): (Signature, _) = signing_key.sign_prehash(&sighash).unwrap();
+
+        let verifying_key = VerifyingKey::from(&signing_key);
+        verifying_key
+            .verify_prehash(&sighash, &sig)
+            .expect("legacy P2PKH sighash verification must succeed");
+    }
+
+    /// BCH FORKID sighash self-consistency: sign + verify.
+    #[test]
+    fn bch_sighash_sign_and_verify() {
+        use k256::ecdsa::{VerifyingKey, signature::hazmat::PrehashVerifier};
+
+        let (key_bytes, inp) = make_legacy_input(0x51);
+        let out = TxOutput {
+            script_pubkey: p2pkh_script(&inp.pubkey_hash),
+            value_sats: 99_000,
+        };
+
+        let sighash = bch_sighash(&[inp], &[out], 0, 1, 0);
+
+        let signing_key = SigningKey::from_bytes((&key_bytes).into()).unwrap();
+        let (sig, _): (Signature, _) = signing_key.sign_prehash(&sighash).unwrap();
+
+        let verifying_key = VerifyingKey::from(&signing_key);
+        verifying_key
+            .verify_prehash(&sighash, &sig)
+            .expect("BCH FORKID sighash verification must succeed");
+    }
+
+    /// p2pkh_script_sig produces correct push opcodes for a typical 71-byte DER sig.
+    #[test]
+    fn p2pkh_script_sig_push_opcodes() {
+        let sig_der = vec![0u8; 71]; // typical DER sig length
+        let sighash_byte = 0x01u8;
+        let pubkey = [0x02u8; 33]; // compressed pubkey
+
+        let script = p2pkh_script_sig(&sig_der, sighash_byte, &pubkey);
+
+        // First byte: push length of (71 + 1 = 72) → OP_PUSHBYTES_72 = 0x48
+        assert_eq!(script[0], 72, "first push opcode must be 0x48 (72)");
+        // Then 72 bytes of sig+sighash, then push 33 bytes for pubkey.
+        assert_eq!(script[1 + 72], 33, "pubkey push opcode must be 0x21 (33)");
+        assert_eq!(script.len(), 1 + 72 + 1 + 33);
+    }
+
+    /// sign_inputs_legacy_p2pkh produces a tx with no segwit marker bytes.
+    #[test]
+    fn sign_inputs_legacy_no_segwit_marker() {
+        let (key_bytes, inp) = make_legacy_input(0x52);
+        let out = TxOutput {
+            script_pubkey: p2pkh_script(&inp.pubkey_hash),
+            value_sats: 99_000,
+        };
+
+        let signed =
+            sign_inputs_legacy_p2pkh(ChainId::Bitcoin, &[inp], &[out], &[key_bytes]).unwrap();
+
+        // Legacy tx: bytes 4-5 are the first byte of vin count (should be 0x01),
+        // NOT 0x00 0x01 (segwit marker/flag). vin count = 1 → 0x01 at offset 4.
+        assert_eq!(signed[4], 0x01, "no segwit marker — offset 4 is vin count");
+        // Confirm byte 5 is NOT the segwit flag.
+        assert_ne!(
+            (signed[4], signed[5]),
+            (0x00, 0x01),
+            "segwit marker must not be present in legacy tx"
+        );
+    }
+
+    /// DOGE full round-trip: derive keys, build inputs/outputs, sign legacy,
+    /// verify no segwit marker and each input has a non-empty scriptSig.
+    #[test]
+    fn doge_sign_round_trip() {
+        use crate::derive::{Purpose, derive_xprv};
+        use crate::network::NetworkParams;
+
+        let seed = [0x77u8; 64];
+        let params = NetworkParams::DOGECOIN_MAINNET;
+        let purpose = Purpose::Bip44;
+
+        let xprv0 = derive_xprv(&seed, purpose, &params, 0, 0, 0).unwrap();
+        let pk0: [u8; 33] = xprv0.public_key().to_bytes();
+        let ph0 = hash160(&pk0);
+        let kb0: [u8; 32] = xprv0.private_key().to_bytes().into();
+
+        let xprv1 = derive_xprv(&seed, purpose, &params, 0, 0, 1).unwrap();
+        let pk1: [u8; 33] = xprv1.public_key().to_bytes();
+        let ph1 = hash160(&pk1);
+        let kb1: [u8; 32] = xprv1.private_key().to_bytes().into();
+
+        let inputs = vec![
+            TxInput {
+                outpoint: Outpoint::from_str(&"dd".repeat(32), 0).unwrap(),
+                sequence: 0xffff_ffff,
+                value_sats: 50_000_000,
+                pubkey_hash: ph0,
+                pubkey: pk0,
+            },
+            TxInput {
+                outpoint: Outpoint::from_str(&"ee".repeat(32), 1).unwrap(),
+                sequence: 0xffff_ffff,
+                value_sats: 30_000_000,
+                pubkey_hash: ph1,
+                pubkey: pk1,
+            },
+        ];
+
+        let out = TxOutput {
+            script_pubkey: p2pkh_script(&ph0),
+            value_sats: 79_000_000,
+        };
+
+        let signed =
+            sign_inputs_legacy_p2pkh(ChainId::Dogecoin, &inputs, &[out], &[kb0, kb1]).unwrap();
+
+        // No segwit marker: version(4 bytes) then vin_count.
+        assert_eq!(signed[4], 0x02, "vin count must be 2 for 2 inputs");
+        assert_ne!(
+            (signed[4], signed[5]),
+            (0x00, 0x01),
+            "no segwit marker in legacy DOGE tx"
+        );
+
+        // Verify scriptSigs are non-empty (check the varint at input offset).
+        // After version(4) + vin_count(1) + outpoint(36) = offset 41.
+        let script_sig_len_offset = 4 + 1 + 36;
+        let ss_len = signed[script_sig_len_offset] as usize;
+        assert!(ss_len > 0, "first input scriptSig must be non-empty");
     }
 }

@@ -130,6 +130,83 @@ pub fn p2pkh_cashaddr(hash160: &[u8; 20], hrp: &str) -> Result<String> {
     encode_cashaddr(hrp, &payload_5bit)
 }
 
+/// Convert 5-bit groups back to bytes (big-endian bit unpacking).
+///
+/// `from_bits` = 5, `to_bits` = 8, strict (no padding bits allowed).
+fn convert_bits_5_to_8(data: &[u8]) -> Option<Vec<u8>> {
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    let mut out = Vec::new();
+    for &b in data {
+        acc = (acc << 5) | (b as u32);
+        bits += 5;
+        while bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xff) as u8);
+        }
+    }
+    // Remaining bits must be zero padding (< 5 bits).
+    if bits >= 5 || (acc & ((1 << bits) - 1)) != 0 {
+        return None;
+    }
+    Some(out)
+}
+
+/// Decode a CashAddr P2PKH address and return the 20-byte pubkey hash.
+///
+/// Verifies the checksum. Returns `Err` for invalid addresses or non-P2PKH types.
+pub fn decode_p2pkh_cashaddr(addr: &str) -> Result<[u8; 20]> {
+    use hodl_core::error::Error;
+    let colon = addr
+        .rfind(':')
+        .ok_or_else(|| Error::Codec("missing ':' in CashAddr".into()))?;
+    let hrp = &addr[..colon];
+    let payload_str = &addr[colon + 1..];
+
+    let mut data_5bit = Vec::with_capacity(payload_str.len());
+    for ch in payload_str.chars() {
+        let pos = CHARSET
+            .iter()
+            .position(|&c| c == ch as u8)
+            .ok_or_else(|| Error::Codec(format!("invalid CashAddr char '{ch}'")))?;
+        data_5bit.push(pos as u8);
+    }
+
+    // Verify checksum.
+    let hrp_bytes = hrp.as_bytes();
+    let mut check_input = Vec::with_capacity(hrp_bytes.len() + 1 + data_5bit.len());
+    for &b in hrp_bytes {
+        check_input.push(b & 0x1f);
+    }
+    check_input.push(0);
+    check_input.extend_from_slice(&data_5bit);
+    let result = polymod(&check_input);
+    if result != 0 {
+        return Err(Error::Codec(format!(
+            "CashAddr checksum invalid (polymod={result:#x})"
+        )));
+    }
+
+    // Strip 8 checksum characters from end to get payload 5-bit groups.
+    let payload_5bit = &data_5bit[..data_5bit.len().saturating_sub(8)];
+    let payload_bytes = convert_bits_5_to_8(payload_5bit)
+        .ok_or_else(|| Error::Codec("CashAddr 5-to-8 bit conversion failed".into()))?;
+
+    // payload_bytes[0] = version byte; [0] & 0xf8 >> 3 = type, [0] & 0x07 = size.
+    if payload_bytes.len() != 21 {
+        return Err(Error::Codec("CashAddr payload length mismatch".into()));
+    }
+    let type_bits = (payload_bytes[0] >> 3) & 0x1f;
+    if type_bits != 0 {
+        return Err(Error::Codec(
+            "CashAddr address is not P2PKH (type != 0)".into(),
+        ));
+    }
+    let mut h160 = [0u8; 20];
+    h160.copy_from_slice(&payload_bytes[1..21]);
+    Ok(h160)
+}
+
 /// Encode a P2SH CashAddr address.
 ///
 /// Type bits = 1 (P2SH), size bits = 0 (160-bit hash).

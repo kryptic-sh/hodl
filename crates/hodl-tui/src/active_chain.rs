@@ -2,7 +2,7 @@
 //! `ChainId` and the user's config (endpoint type + URL + Tor toggle).
 
 use hodl_chain_bitcoin::electrum::{ElectrumClient, Utxo};
-use hodl_chain_bitcoin::{BitcoinChain, InputHint, NetworkParams as BtcNetworkParams, Purpose};
+use hodl_chain_bitcoin::{BitcoinChain, InputHint, NetworkParams as BtcNetworkParams};
 use hodl_chain_ethereum::{EthRpcClient, EthereumChain, NetworkParams as EthNetworkParams};
 use hodl_chain_monero::{LwsClient, MoneroChain, NetworkParams as XmrNetworkParams};
 use hodl_config::{Config, Endpoint};
@@ -62,9 +62,8 @@ impl ActiveChain {
                         ))
                     })?;
                 let electrum = electrum_connect(endpoint, proxy)?;
-                Ok(ActiveChain::Bitcoin(
-                    BitcoinChain::new(params, electrum).with_purpose(Purpose::Bip84),
-                ))
+                // BitcoinChain::new sets purpose via default_send_purpose per chain.
+                Ok(ActiveChain::Bitcoin(BitcoinChain::new(params, electrum)))
             }
             ChainId::Ethereum | ChainId::BscMainnet => {
                 let params = eth_network_params(id);
@@ -153,18 +152,6 @@ impl ActiveChain {
     ) -> Result<PreparedSend> {
         match self {
             ActiveChain::Bitcoin(c) => {
-                let chain_id = c.id();
-                // Only BTC mainnet and testnet have segwit-v0 PSBT send support.
-                // DOGE/BCH/NAV/LTC all share this code path but legacy P2PKH signing
-                // (needed for DOGE, BCH, NAV) is post-v1 — gate here so the dispatch
-                // shape is in place for future match arms.
-                if !matches!(chain_id, ChainId::Bitcoin | ChainId::BitcoinTestnet) {
-                    return Err(Error::Chain(format!(
-                        "send for {} not yet implemented; only BTC/BTC-testnet have \
-                         segwit-v0 PSBT support today",
-                        chain_id.display_name()
-                    )));
-                }
                 let (utxos, hints, change_sats) =
                     c.build_tx_multi_source(seed, account, params, opts.rbf, opts.gap_limit)?;
                 Ok(PreparedSend::Bitcoin {
