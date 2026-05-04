@@ -16,12 +16,18 @@
 //! - `TryRecvError::Empty`   → tick `scanning_spinner`; no redraw.
 //! - `TryRecvError::Disconnected` → set scan_error to "scan thread panicked".
 //!
-//! While scanning, navigation keys that depend on scan results (`r`/`s`/`b`/`d`)
-//! are suppressed. `q`, `S`, `p`, Ctrl-C/D, and `?` always work.
+//! Navigation keys are responsive even while a scan is in flight:
+//! `r`/`b`/`q`/`S`/`p`/`?` always work; `s` works once any scan data
+//! (cached, completed, or in-flight partial) is available; `d` opens
+//! the streaming Addresses sub-view as soon as any used address is
+//! known. Only `R` (force resync) is blocked during a scan to avoid
+//! racing the in-flight one. Leaving the Accounts screen mid-scan
+//! drops the in-flight worker; returning kicks off a fresh scan
+//! (the cache prime keeps the summary card populated meanwhile).
 //!
 //! The summary card shows partial results (live count + running balance) while
 //! scanning, with the spinner ticking next to the numbers. The Addresses
-//! sub-view (`d`) is still gated on a completed scan snapshot.
+//! sub-view (`d`) opens as soon as the partial scan has any used address.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -361,8 +367,8 @@ impl AccountState {
 
     /// Route a keypress. Returns an action when the screen wants to transition.
     ///
-    /// `r`/`s`/`b`/`d` are blocked while `is_scanning()` is true.
-    /// `q`, `S`, `p`, Ctrl-C/D, and `?` always work.
+    /// Most navigation keys are responsive even while a scan runs; only
+    /// `R` (force resync) is blocked. See module-level docs for details.
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<AccountAction> {
         // Ctrl-C / Ctrl-D quit.
         if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -395,19 +401,30 @@ impl AccountState {
         }
 
         match key.code {
-            // Actions below are blocked while a scan is in flight.
-            KeyCode::Char('r') if !self.is_scanning() => {
+            // `r` (Receive) is always available — `pick_receive` falls back
+            // to deriving address index 0 when no scan data exists, so the
+            // user can always show a deposit address.
+            KeyCode::Char('r') => {
                 return Some(AccountAction::OpenReceive);
             }
-            KeyCode::Char('s') if !self.is_scanning() => {
-                let total_balance_sats = self.scan.as_ref().map(|s| s.total.total()).unwrap_or(0);
+            // `s` (Send) needs a known balance. Allow whenever *any* scan
+            // data is present — cached, completed, or in-flight partial —
+            // so the user isn't left staring at the spinner. If only the
+            // partial accumulator has data we use its running total.
+            KeyCode::Char('s') if self.scan.is_some() || !self.partial_scan.used.is_empty() => {
+                let total_balance_sats = self
+                    .scan
+                    .as_ref()
+                    .map(|s| s.total.total())
+                    .unwrap_or_else(|| self.partial_scan.total.total());
                 return Some(AccountAction::OpenSend {
                     chain: self.current_chain,
                     account: 0,
                     total_balance_sats,
                 });
             }
-            KeyCode::Char('b') if !self.is_scanning() => {
+            // `b` (Address book) is independent of scan state.
+            KeyCode::Char('b') => {
                 return Some(AccountAction::OpenAddressBook);
             }
             // `d` opens the streaming Addresses sub-view as long as *some*
@@ -425,6 +442,8 @@ impl AccountState {
             {
                 return Some(AccountAction::OpenAddresses);
             }
+            // `R` (force resync) is degenerate while a scan is already in
+            // flight — block to keep the running scan and avoid races.
             KeyCode::Char('R') if !self.is_scanning() => {
                 return Some(AccountAction::Resync);
             }
