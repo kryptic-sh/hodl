@@ -1279,11 +1279,8 @@ mod tests {
         (key_bytes, inp)
     }
 
-    /// scriptSig for P2SH-P2WPKH must be a 23-byte push of the 22-byte
-    /// redeemScript: 0x17 (push-23 — wait, push 22 bytes is 0x16)
-    ///
+    /// scriptSig for P2SH-P2WPKH: 23-byte push of the 22-byte redeemScript.
     /// Wire layout: varint(23) + [0x16, 0x00, 0x14, <20 bytes>]
-    /// scriptSig bytes: push-opcode(0x16) + redeemScript(22 bytes) = 23 bytes.
     #[test]
     fn p2sh_p2wpkh_scriptsig_shape() {
         let (key_bytes, inp) = make_bip49_input(0x70);
