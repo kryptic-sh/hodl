@@ -132,8 +132,24 @@ impl SettingsState {
                 return None;
             }
         };
-        if let Err(e) = std::fs::write(&self.config_path, toml_str.as_bytes()) {
+        // Ensure the config dir exists — first save can fire before any
+        // other code has touched `~/.config/hodl/` (vault lives under the
+        // *data* dir, not the config dir).
+        if let Some(parent) = self.config_path.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            self.message = Some((format!("create dir failed: {e}"), true));
+            return None;
+        }
+        // Atomic temp + rename so a crash mid-write can't truncate the
+        // existing config.
+        let tmp = self.config_path.with_extension("toml.tmp");
+        if let Err(e) = std::fs::write(&tmp, toml_str.as_bytes()) {
             self.message = Some((format!("write failed: {e}"), true));
+            return None;
+        }
+        if let Err(e) = std::fs::rename(&tmp, &self.config_path) {
+            self.message = Some((format!("rename failed: {e}"), true));
             return None;
         }
         self.message = Some(("settings saved".into(), false));
