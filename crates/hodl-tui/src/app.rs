@@ -264,18 +264,6 @@ impl App {
                         continue;
                     }
 
-                    // Mouse scroll on the accounts table: one row per event,
-                    // regardless of the OS-level scroll delta. Each
-                    // ScrollUp/ScrollDown crossterm event maps to exactly one
-                    // move_selection call so wheel speed cannot jump multiple rows.
-                    if let (Event::Mouse(m), Screen::Accounts(s)) = (&ev, &mut self.screen) {
-                        match m.kind {
-                            MouseEventKind::ScrollUp => s.move_selection(-1),
-                            MouseEventKind::ScrollDown => s.move_selection(1),
-                            _ => {}
-                        }
-                    }
-
                     let action = match &mut self.screen {
                         Screen::Accounts(s) => {
                             if let Event::Key(k) = ev {
@@ -312,9 +300,24 @@ impl App {
                             let ab_state = AddressBookState::new(book, book_path);
                             self.screen = Screen::AddressBook(Box::new(ab_state));
                         }
-                        Some(AccountAction::OpenReceive(addr)) => {
-                            let path = "m/84'/0'/0'/0/0".to_string();
-                            self.screen = Screen::Receive(ReceiveState::new(addr, path));
+                        Some(AccountAction::OpenReceive(_)) => {
+                            // Resolve the best receive address from the scan (or
+                            // derive index 0 as fallback). The placeholder address
+                            // returned by handle_key is discarded here.
+                            let addr = if let (Screen::Accounts(s), Some(unlocked)) =
+                                (&self.screen, &self.unlocked)
+                            {
+                                s.pick_receive_address(unlocked)
+                            } else {
+                                None
+                            };
+                            if let Some(addr) = addr {
+                                let path = "m/84'/0'/0'/0/0".to_string();
+                                self.screen = Screen::Receive(ReceiveState::new(addr, path));
+                            }
+                        }
+                        Some(AccountAction::OpenAddresses) => {
+                            // Step C: open Addresses sub-view
                         }
                         Some(AccountAction::OpenSend {
                             chain,

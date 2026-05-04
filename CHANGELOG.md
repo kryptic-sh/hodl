@@ -30,6 +30,18 @@ and this project adheres to
 
 ### Changed
 
+- **Accounts screen redesigned as a per-chain summary card.** The previous 5-row
+  address table is replaced by a centred summary card showing confirmed balance,
+  pending balance, total balance, used-address count, and gap limit for the
+  selected chain. While the background scan runs, the card body shows
+  `scanning… ⠋` in cyan and the status line reads `<chain> · scanning…`. After
+  the scan completes the status shows `<chain> · synced N/N used` in green; on
+  failure it shows `<chain> · scan failed: <err>` in red. The `d` keybind now
+  triggers `OpenAddresses` (routing wired in Step C). Mouse-scroll on the
+  accounts table removed (no table). `j`/`k` keybinds removed. `S` (settings) is
+  no longer blocked while scanning. Receive address is picked as the first used
+  receive-chain address from the scan, falling back to derived index 0.
+
 - **Endpoint selection is randomised with automatic fail-over.**
   `ActiveChain::from_chain_id` now shuffles the configured endpoint list per
   `ChainId` and tries each candidate in turn until one connects. Failed servers
