@@ -10,6 +10,13 @@ and this project adheres to
 
 ### Changed
 
+- **Endpoint selection is randomised with automatic fail-over.**
+  `ActiveChain::from_chain_id` now shuffles the configured endpoint list per
+  `ChainId` and tries each candidate in turn until one connects. Failed servers
+  are skipped for the remainder of that connection attempt so a dead endpoint
+  can't block a working one further down the list. Applies to Electrum (BTC
+  family), JsonRpc (EVM), and LWS (Monero).
+
 - **Spinner extracted into reusable `Spinner` widget** (`hodl-tui::spinner`) —
   `SPINNER_FRAMES`, `tick()`, `current()`, and `draw()` are now shared across
   all screens. `lock.rs` migrated from inline `spinner_frame: usize` + literal

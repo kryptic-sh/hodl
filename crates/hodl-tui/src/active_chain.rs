@@ -8,6 +8,7 @@ use hodl_chain_monero::{LwsClient, MoneroChain, NetworkParams as XmrNetworkParam
 use hodl_config::{Config, Endpoint};
 use hodl_core::error::{Error, Result};
 use hodl_core::{Address, Amount, Chain, ChainId, FeeRate, SendParams, TxId, UnsignedTx};
+use rand::seq::SliceRandom;
 
 pub enum ActiveChain {
     Bitcoin(BitcoinChain),
@@ -51,57 +52,49 @@ impl ActiveChain {
             | ChainId::NavCoin => {
                 let params = btc_network_params(id);
                 let chain_cfg = config.chains.get(&id).cloned().unwrap_or_default();
-                let endpoint = chain_cfg
+                let endpoints: Vec<&Endpoint> = chain_cfg
                     .endpoints
                     .iter()
-                    .find(|ep| matches!(ep, Endpoint::Electrum { .. }))
-                    .ok_or_else(|| {
-                        Error::Endpoint(format!(
-                            "no Electrum endpoint configured for {}",
-                            id.display_name()
-                        ))
-                    })?;
-                let electrum = electrum_connect(endpoint, proxy)?;
-                // BitcoinChain::new sets purpose via default_send_purpose per chain.
+                    .filter(|ep| matches!(ep, Endpoint::Electrum { .. }))
+                    .collect();
+                let electrum =
+                    try_endpoints("Electrum", id, &endpoints, |ep| electrum_connect(ep, proxy))?;
                 Ok(ActiveChain::Bitcoin(BitcoinChain::new(params, electrum)))
             }
             ChainId::Ethereum | ChainId::BscMainnet => {
                 let params = eth_network_params(id);
                 let chain_cfg = config.chains.get(&id).cloned().unwrap_or_default();
-                let endpoint = chain_cfg
+                let endpoints: Vec<&Endpoint> = chain_cfg
                     .endpoints
                     .iter()
-                    .find(|ep| matches!(ep, Endpoint::JsonRpc { .. }))
-                    .ok_or_else(|| {
-                        Error::Endpoint(format!(
-                            "no JsonRpc endpoint configured for {}",
-                            id.display_name()
-                        ))
-                    })?;
-                let url = match endpoint {
-                    Endpoint::JsonRpc { url } => url.clone(),
-                    _ => unreachable!(),
-                };
-                let rpc = match proxy {
-                    Some(p) => EthRpcClient::with_socks5(url, p)?,
-                    None => EthRpcClient::new(url),
-                };
+                    .filter(|ep| matches!(ep, Endpoint::JsonRpc { .. }))
+                    .collect();
+                let rpc = try_endpoints("JsonRpc", id, &endpoints, |ep| {
+                    let url = match ep {
+                        Endpoint::JsonRpc { url } => url.clone(),
+                        _ => unreachable!(),
+                    };
+                    match proxy {
+                        Some(p) => EthRpcClient::with_socks5(url, p),
+                        None => Ok(EthRpcClient::new(url)),
+                    }
+                })?;
                 Ok(ActiveChain::Ethereum(EthereumChain::new(params, rpc)))
             }
             ChainId::Monero => {
                 let chain_cfg = config.chains.get(&id).cloned().unwrap_or_default();
-                let lws_endpoint = chain_cfg
+                let endpoints: Vec<&Endpoint> = chain_cfg
                     .endpoints
                     .iter()
-                    .find(|ep| matches!(ep, Endpoint::Lws { .. }))
-                    .ok_or_else(|| {
-                        Error::Endpoint("no Lws endpoint configured for Monero".into())
-                    })?;
-                let lws_url = match lws_endpoint {
-                    Endpoint::Lws { url } => url.clone(),
-                    _ => unreachable!(),
-                };
-                let lws = LwsClient::new(lws_url);
+                    .filter(|ep| matches!(ep, Endpoint::Lws { .. }))
+                    .collect();
+                let lws = try_endpoints("Lws", id, &endpoints, |ep| {
+                    let url = match ep {
+                        Endpoint::Lws { url } => url.clone(),
+                        _ => unreachable!(),
+                    };
+                    Ok(LwsClient::new(url))
+                })?;
                 Ok(ActiveChain::Monero(MoneroChain::new(
                     XmrNetworkParams::MAINNET,
                     Some(lws),
@@ -232,6 +225,52 @@ fn eth_network_params(id: ChainId) -> EthNetworkParams {
         ChainId::BscMainnet => EthNetworkParams::BSC_MAINNET,
         _ => unreachable!("non-Ethereum chain passed to eth_network_params"),
     }
+}
+
+/// Try a list of endpoints in random order, returning the first successful
+/// connection. Each endpoint is tried at most once per call; tracks failures
+/// implicitly by removing tried endpoints from the rotation. Returns the last
+/// error if every endpoint failed, or an empty-list error if `endpoints` is
+/// empty.
+///
+/// Random order distributes load across the curated server list and avoids
+/// thundering-herd against the first endpoint after a config reload.
+fn try_endpoints<T, F>(
+    kind: &'static str,
+    chain: ChainId,
+    endpoints: &[&Endpoint],
+    mut connect: F,
+) -> Result<T>
+where
+    F: FnMut(&Endpoint) -> Result<T>,
+{
+    if endpoints.is_empty() {
+        return Err(Error::Endpoint(format!(
+            "no {kind} endpoint configured for {}",
+            chain.display_name()
+        )));
+    }
+
+    let mut order: Vec<usize> = (0..endpoints.len()).collect();
+    order.shuffle(&mut rand::thread_rng());
+
+    let mut last_err: Option<Error> = None;
+    for i in order {
+        let ep = endpoints[i];
+        match connect(ep) {
+            Ok(client) => return Ok(client),
+            Err(e) => {
+                tracing::warn!("{kind} connect failed for {ep:?}: {e}");
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| {
+        Error::Endpoint(format!(
+            "all {kind} endpoints failed for {}",
+            chain.display_name()
+        ))
+    }))
 }
 
 /// Connect to an Electrum server from a URL like `ssl://host:60002` or
