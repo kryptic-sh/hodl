@@ -67,11 +67,13 @@ process.
 **Rules**
 
 - Off-thread the work (`std::thread::spawn` + `mpsc::channel`) so the event loop
-  keeps ticking the spinner.
-- Reuse `hodl_tui::spinner::Spinner` — don't roll a new frame array.
-- `pending_*: Option<Receiver<…>>` on the screen state; advance the frame on
-  `try_recv() == Err(Empty)`; drop the event-poll timeout to ~80ms while
-  pending.
+  keeps redrawing.
+- Use `hjkl_ratatui::spinner::frame()` — wall-clock derived, caller-cadence-
+  independent. No local frame counters, no manual tick-on-empty.
+- `pending_*: Option<Receiver<…>>` on the screen state; drop the event-poll
+  timeout to ~80ms while pending so redraws keep up with the spinner.
+- Redraw every loop iteration (not only on phase changes / event timeouts) so
+  form input echoes immediately. See `lock.rs` / `send.rs` for the pattern.
 - Block user input that depends on the in-flight result (or queue it explicitly)
   so the user can't double-submit.
 - When transitioning to a new screen that will immediately do blocking work,

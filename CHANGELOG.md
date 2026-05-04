@@ -8,7 +8,27 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Send screen redraws on every loop iteration.** Form input felt laggy because
+  the Send event loop only redrew on phase changes or event-poll timeouts;
+  keystrokes handled by the form fell through without triggering a redraw, so
+  echo lagged up to ~250 ms (the idle event-poll wait). The draw call is now
+  hoisted to the top of every iteration — single unconditional render covers
+  both spinner animation and post-event echo paths uniformly, matching the
+  `lock.rs` loop structure.
+
 ### Changed
+
+- **Spinner refactor: drop local `Spinner` widget for
+  `hjkl_ratatui::spinner::frame()`.** The local braille `Spinner` in
+  `hodl-tui::spinner` (per-instance frame counter + manual `tick()` calls) is
+  removed in favour of the wall-clock-derived `frame()` from `hjkl-ratatui`.
+  Caller cadence no longer affects animation rate by construction — eliminates
+  the class of bug where event-loop bursts (mouse moves, fast key repeat) sped
+  the spinner up. Drops ~165 lines of state plumbing across `lock.rs` /
+  `account.rs` / `send.rs`; shrinks `Phase::Building` and `Phase::Broadcasting`
+  tuples in `send.rs` by one element each.
 
 - **TOFU cert pinning for Electrum TLS connections.** The previous
   `AcceptAnyServerCert` verifier (which accepted any TLS cert silently) is
