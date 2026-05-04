@@ -56,6 +56,14 @@ and this project adheres to
 
 ### Added
 
+- **Persistent debug log at `<data_root>/hodl.log`.** All `tracing` events are
+  appended to a sync-written, no-ANSI log file under the data directory so
+  post-crash review is possible even after the alt-screen tears down. Default
+  filter is `info,hodl*=debug` (override with `RUST_LOG`). When stdout is
+  **not** a TTY (piped/CI), events are also tee'd to stderr; when stdout is a
+  TTY the TUI owns the terminal and the file is the only sink (extra stderr
+  writes would corrupt the alt-screen frame). Log file is opened for append, so
+  logs accumulate across runs.
 - **Addresses sub-view (`d` from Accounts screen).** Pressing `d` on the
   Accounts screen (once a scan is complete and at least one used address exists)
   opens a new read-only `Addresses` screen backed by the cached `WalletScan` —

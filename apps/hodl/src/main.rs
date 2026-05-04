@@ -1,7 +1,13 @@
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use hodl_wallet::storage;
 
@@ -58,15 +64,13 @@ enum Cmd {
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
     let cli = Cli::parse();
     let data_root = match cli.data_dir.clone() {
         Some(p) => p,
         None => storage::default_data_dir()?,
     };
+
+    init_logging(&data_root)?;
 
     match cli.cmd.unwrap_or(Cmd::Unlock {
         name: "default".into(),
@@ -83,6 +87,60 @@ fn main() -> Result<()> {
             }
         }
     }
+}
+
+/// Initialize tracing.
+///
+/// - Always writes to `<data_root>/hodl.log` (append, no ANSI). Sync writes
+///   so a panic mid-render still leaves a usable trail for post-mortem.
+/// - Also tees to stderr when **stdout is not a TTY** (piped / non-interactive
+///   runs). When stdout is a TTY the TUI owns the terminal — extra stderr
+///   output would corrupt the alt-screen frame, so we stay silent there and
+///   the file is the only sink.
+/// - Filter defaults to `info,hodl*=debug`; honor `RUST_LOG` if set.
+fn init_logging(data_root: &Path) -> Result<()> {
+    std::fs::create_dir_all(data_root)
+        .with_context(|| format!("create data dir {}", data_root.display()))?;
+
+    let log_path = data_root.join("hodl.log");
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("open log file {}", log_path.display()))?;
+
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(
+            "info,hodl=debug,hodl_tui=debug,hodl_wallet=debug,\
+             hodl_chain_bitcoin=debug,hodl_chain_ethereum=debug,hodl_chain_monero=debug",
+        )
+    });
+
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(Mutex::new(file))
+        .with_ansi(false)
+        .with_target(true);
+
+    let stderr_layer = (!std::io::stdout().is_terminal()).then(|| {
+        tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_ansi(std::io::stderr().is_terminal())
+            .with_target(true)
+    });
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(file_layer)
+        .with(stderr_layer)
+        .init();
+
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        data_dir = %data_root.display(),
+        log = %log_path.display(),
+        "hodl starting"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

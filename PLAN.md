@@ -383,10 +383,6 @@ get re-prioritised.
 - **Send-screen address book picker.** Wire `hjkl-picker` into the recipient
   field so the user can select from saved contacts instead of typing the
   address.
-- **Debug log to file.** Tracing currently goes to stderr only; stderr is
-  swallowed under the alt-screen TUI. A rolling debug log at
-  `<data_root>/hodl.log` (with a sensible env-filter) would let users diagnose
-  failures without re-running outside the TUI.
 
 ### Per-chain scan strategies
 
