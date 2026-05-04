@@ -1,4 +1,4 @@
-//! CashAddr encoding for Bitcoin Cash (BCH) and eCash (XEC).
+//! CashAddr encoding for Bitcoin Cash (BCH).
 //!
 //! CashAddr is a base32 encoding scheme defined by the Bitcoin Cash project:
 //! <https://github.com/bitcoincashorg/bitcoincash.org/blob/master/spec/cashaddr.md>
@@ -205,19 +205,7 @@ mod tests {
         verify_cashaddr(&addr).expect("checksum should be valid");
     }
 
-    /// All-zeros hash → XEC variant.
-    #[test]
-    fn p2pkh_all_zeros_xec() {
-        let hash = [0u8; 20];
-        let addr = p2pkh_cashaddr(&hash, "ecash").unwrap();
-        assert!(
-            addr.starts_with("ecash:q"),
-            "expected ecash:q prefix, got {addr}"
-        );
-        verify_cashaddr(&addr).expect("checksum should be valid");
-    }
-
-    /// P2SH all-zeros hash (type bit flipped → different address).
+/// P2SH all-zeros hash (type bit flipped → different address).
     #[test]
     fn p2sh_all_zeros_bch() {
         let hash = [0u8; 20];

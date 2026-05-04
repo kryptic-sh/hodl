@@ -18,6 +18,17 @@ and this project adheres to
   `NAVCOIN_MAINNET`. The newer **Navio** chain (Navio-project, distinct fork) is
   deferred to a future release as a sibling `NetworkParams` record.
 
+### Removed
+
+- **BREAKING:** dropped Bitcoin SV (BSV) and eCash (XEC). Both sit deep outside
+  the CMC top-100 (BSV #113, ~$320M; XEC #167, ~$145M) with little active
+  development; carrying their constants + tests was buying nothing. Removed:
+  `ChainId::BitcoinSv`, `ChainId::ECash`, `NetworkParams::BITCOIN_SV_MAINNET`,
+  `NetworkParams::ECASH_MAINNET`, the per-chain branches in `address.rs` and
+  `derive.rs::validate_purpose`, the address-book aliases, and the related
+  tests. CashAddr encoder stays for BCH. If demand returns, re-add as
+  `NetworkParams` records — the abstraction makes it cheap.
+
 ## [0.2.0] - 2026-05-04
 
 End-to-end M2 → M8 release. Ships read + send for Bitcoin and Ethereum, read for

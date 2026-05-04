@@ -77,33 +77,6 @@ impl NetworkParams {
         default_electrum_tls_port: 50002,
     };
 
-    /// Bitcoin SV mainnet.
-    ///
-    /// **Note:** bech32 / segwit is **not deployed** on BSV. The `bech32_hrp`
-    /// field is present for record symmetry only. `Purpose::Bip44` (legacy
-    /// P2PKH with 0x00 prefix, same as BTC) is the only valid path for BSV.
-    pub const BITCOIN_SV_MAINNET: Self = Self {
-        chain_id: ChainId::BitcoinSv,
-        bech32_hrp: "bsv",  // not deployed — field for symmetry only
-        p2pkh_prefix: 0x00, // same as BTC legacy
-        p2sh_prefix: 0x05,
-        default_electrum_port: 50001,
-        default_electrum_tls_port: 50002,
-    };
-
-    /// eCash (XEC) mainnet. Uses CashAddr encoding with `"ecash"` HRP.
-    ///
-    /// The `bech32_hrp` field holds the CashAddr HRP (`"ecash"`). BIP-49/84/86
-    /// are not deployed on XEC.
-    pub const ECASH_MAINNET: Self = Self {
-        chain_id: ChainId::ECash,
-        bech32_hrp: "ecash", // CashAddr HRP
-        p2pkh_prefix: 0x00,
-        p2sh_prefix: 0x05,
-        default_electrum_port: 50001,
-        default_electrum_tls_port: 50002,
-    };
-
     /// NavCoin (NAV) mainnet. Bitcoin-derivative chain with native segwit.
     ///
     /// Standard P2PKH + bech32 P2WPKH; BIP-44/49/84 supported. BIP-86

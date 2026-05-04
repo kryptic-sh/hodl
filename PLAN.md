@@ -51,14 +51,14 @@ overlap with already-implemented code, and light-wallet protocol availability.
 | Litecoin     | LTC    | 2       | Code-fork. Electrum-LTC servers. Native MWEB optional, post-v1. |
 | Dogecoin     | DOGE   | 3       | Litecoin descendant. Electrum-Doge servers or public RPC.       |
 | Bitcoin Cash | BCH    | 145     | Chain-fork of BTC. CashAddr encoding. Electrum-Cash protocol.   |
-| Bitcoin SV   | BSV    | 236     | Chain-fork of BCH. Electrum SV servers.                         |
-| eCash        | XEC    | 1899    | Chain-fork of BCH. Chronik / Electrum-Cash-protocol fork.       |
 
 ### Tier 3 — explicitly out of scope for v1
 
 Bitcoin Gold (51%-attacked twice, near-dead dev activity), Bitcoin Diamond,
-DigiByte, Vertcoin, Zcash, Dash, and other forks. Add later if demand exists;
-the chain abstraction should make the marginal cost low.
+DigiByte, Vertcoin, Zcash, Dash, **Bitcoin SV** (CMC #113, ~$320M cap, no real
+ecosystem), **eCash** (CMC #167, ~$145M cap, near-dead post-rebrand), and other
+forks. Add later if demand exists; the chain abstraction should make the
+marginal cost low.
 
 ## Mnemonic & Key Derivation
 
@@ -118,7 +118,7 @@ Native 25-word Monero seeds may be supported as a separate import path post-v1.
               v
 +-------------------------------+
 | hodl-chain-* (per-family)     |   trait Chain — balance, history, send
-|   hodl-chain-bitcoin          |     BTC + BCH + BSV + LTC + DOGE + BTG + XEC + NAVIO
+|   hodl-chain-bitcoin          |     BTC + BCH + LTC + DOGE + NAV
 |   hodl-chain-ethereum         |     ETH + BSC (EVM)
 |   hodl-chain-monero           |     XMR
 +-------------------------------+
@@ -173,10 +173,9 @@ pub trait Chain {
 
 The Bitcoin-family crate parameterizes a single implementation by network
 constants (magic bytes, address HRP, dust limit, default port), so adding
-Litecoin / Doge / BCH / BSV / BTG / XEC / NavCoin after BTC works is mostly a
-config record + endpoint list. NavCoin's blsCT-based xNAV privacy spends are the
-one exception — they need a dedicated module on top of the base UTXO codec
-(post-v1).
+Litecoin / Doge / BCH / NavCoin after BTC works is mostly a config record +
+endpoint list. NavCoin's blsCT-based xNAV privacy spends are the one exception —
+they need a dedicated module on top of the base UTXO codec (post-v1).
 
 The newer **Navio** chain (Navio-project, distinct from legacy NavCoin) is
 deferred — when its prefix bytes / HRP / xNAV variant stabilize we'll add a
@@ -311,9 +310,8 @@ widget code in `hodl-tui` for form chrome.
 - **M4 — Ethereum.** JSON-RPC client, EIP-155 sign, EIP-1559 fees, send native
   ETH. ERC-20 read post-v1.
 - **M5 — BNB Smart Chain.** Reuses M4 crate; chain-id 56, default RPC list.
-- **M6 — Bitcoin family.** BCH, LTC, DOGE, BSV, BTG, XEC. Each = constants
-  record + endpoint list + address codec where it differs (CashAddr for BCH /
-  XEC).
+- **M6 — Bitcoin family.** BCH, LTC, DOGE. Each = constants record + endpoint
+  list + address codec where it differs (CashAddr for BCH).
 - **M7 — Monero.** BIP-39 → Ledger-compat derivation, view-key sync via LWS,
   send via own-node JSON-RPC.
 - **M7.5 — NavCoin.** Public NAV via the Bitcoin-family path (constants record

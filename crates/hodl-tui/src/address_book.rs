@@ -84,8 +84,6 @@ fn parse_chain(s: &str) -> Option<ChainId> {
         "litecoin" | "ltc" => Some(ChainId::Litecoin),
         "dogecoin" | "doge" => Some(ChainId::Dogecoin),
         "bitcoin-cash" | "bch" => Some(ChainId::BitcoinCash),
-        "bitcoin-sv" | "bsv" => Some(ChainId::BitcoinSv),
-        "ecash" | "xec" => Some(ChainId::ECash),
         "navcoin" | "nav" => Some(ChainId::NavCoin),
         "ethereum" | "eth" => Some(ChainId::Ethereum),
         "bnb" | "bsc" | "bsc-mainnet" => Some(ChainId::BscMainnet),
@@ -588,8 +586,6 @@ impl ChainPickerSource {
                 ChainId::BitcoinCash,
                 ChainId::BscMainnet,
                 ChainId::NavCoin,
-                ChainId::ECash,
-                ChainId::BitcoinSv,
                 ChainId::BitcoinTestnet,
             ],
         }

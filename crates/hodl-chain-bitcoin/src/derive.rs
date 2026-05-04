@@ -41,8 +41,6 @@ fn path_str(purpose: u32, coin: u32, account: u32, change: u32, index: u32) -> S
 /// | Litecoin    | Bip44, 49, 84             | MWEB is post-v1; no taproot on LTC   |
 /// | Dogecoin    | Bip44 only                | bech32/segwit not deployed on DOGE   |
 /// | BitcoinCash | Bip44, 49 (→ CashAddr)    | BIP-84/86 not deployed on BCH        |
-/// | BitcoinSv   | Bip44 only                | bech32/segwit not deployed on BSV    |
-/// | ECash       | Bip44, 49 (→ CashAddr)    | BIP-84/86 not deployed on XEC        |
 /// | NavCoin     | Bip44, 49, 84             | segwit deployed; no taproot on NAV   |
 /// | others      | all (pass-through)        | Unknown derivative — no restriction  |
 fn validate_purpose(purpose: Purpose, params: &NetworkParams) -> Result<()> {
@@ -51,10 +49,8 @@ fn validate_purpose(purpose: Purpose, params: &NetworkParams) -> Result<()> {
         ChainId::Litecoin | ChainId::NavCoin => {
             matches!(purpose, Purpose::Bip44 | Purpose::Bip49 | Purpose::Bip84)
         }
-        ChainId::Dogecoin | ChainId::BitcoinSv => matches!(purpose, Purpose::Bip44),
-        ChainId::BitcoinCash | ChainId::ECash => {
-            matches!(purpose, Purpose::Bip44 | Purpose::Bip49)
-        }
+        ChainId::Dogecoin => matches!(purpose, Purpose::Bip44),
+        ChainId::BitcoinCash => matches!(purpose, Purpose::Bip44 | Purpose::Bip49),
         _ => true,
     };
     if ok {
@@ -343,73 +339,6 @@ mod tests {
         assert!(result.is_err(), "BIP-86 must be rejected on BCH");
     }
 
-    /// BSV P2PKH — m/44'/236'/0'/0/0 must start with "1" (0x00 prefix, same as BTC).
-    #[test]
-    fn bsv_p2pkh_prefix() {
-        let seed = seed_bytes();
-        let addr = derive_address(
-            &seed,
-            Purpose::Bip44,
-            &NetworkParams::BITCOIN_SV_MAINNET,
-            0,
-            0,
-            0,
-        )
-        .unwrap();
-        assert!(
-            addr.starts_with('1'),
-            "BSV P2PKH must start with '1', got {addr}"
-        );
-    }
-
-    /// BSV does not support BIP-49.
-    #[test]
-    fn bsv_bip49_rejected() {
-        let seed = seed_bytes();
-        let result = derive_address(
-            &seed,
-            Purpose::Bip49,
-            &NetworkParams::BITCOIN_SV_MAINNET,
-            0,
-            0,
-            0,
-        );
-        assert!(result.is_err(), "BIP-49 must be rejected on BSV");
-    }
-
-    /// XEC CashAddr — m/44'/1899'/0'/0/0 must start with "ecash:q".
-    #[test]
-    fn xec_cashaddr_p2pkh_prefix() {
-        let seed = seed_bytes();
-        let addr = derive_address(
-            &seed,
-            Purpose::Bip44,
-            &NetworkParams::ECASH_MAINNET,
-            0,
-            0,
-            0,
-        )
-        .unwrap();
-        assert!(
-            addr.starts_with("ecash:q"),
-            "XEC P2PKH must start with 'ecash:q', got {addr}"
-        );
-    }
-
-    /// XEC does not support BIP-86.
-    #[test]
-    fn xec_bip86_rejected() {
-        let seed = seed_bytes();
-        let result = derive_address(
-            &seed,
-            Purpose::Bip86,
-            &NetworkParams::ECASH_MAINNET,
-            0,
-            0,
-            0,
-        );
-        assert!(result.is_err(), "BIP-86 must be rejected on XEC");
-    }
 
     // --- NavCoin (NAV) tests ---
 
