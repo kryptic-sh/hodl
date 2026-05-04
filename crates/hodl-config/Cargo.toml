@@ -14,8 +14,6 @@ serde = { workspace = true }
 toml.workspace = true
 thiserror.workspace = true
 hjkl-config.workspace = true
-sha2.workspace = true
-hex.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

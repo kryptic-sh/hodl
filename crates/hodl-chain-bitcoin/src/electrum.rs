@@ -77,7 +77,17 @@ impl ElectrumClient {
             .map_err(|e| Error::Network(format!("invalid TLS server name {host}: {e}")))?;
         let conn =
             ClientConnection::new(config, server_name).map_err(|e| map_tls_error(e, &host_port))?;
-        let tls = rustls::StreamOwned::new(conn, tcp);
+        let mut tls = rustls::StreamOwned::new(conn, tcp);
+        // rustls is lazy: the handshake (and our verify_server_cert) only
+        // runs when there's actual I/O. Force it now so newly_pinned is
+        // populated before we return. flush on a fresh connection drives
+        // the handshake to completion without sending application data.
+        tls.flush().map_err(|e| {
+            map_tls_error(
+                rustls::Error::General(format!("TLS flush: {e}")),
+                &host_port,
+            )
+        })?;
         let new_fp = newly_pinned.lock().unwrap().take();
         Ok((Self::from_transport(Box::new(tls)), new_fp))
     }
@@ -107,7 +117,16 @@ impl ElectrumClient {
             .map_err(|e| Error::Network(format!("TCP connect {host}:{port}: {e}")))?;
         let conn =
             ClientConnection::new(config, server_name).map_err(|e| map_tls_error(e, &host_port))?;
-        let tls = rustls::StreamOwned::new(conn, tcp);
+        let mut tls = rustls::StreamOwned::new(conn, tcp);
+        // rustls is lazy: the handshake (and our verify_server_cert) only
+        // runs when there's actual I/O. Force it now so newly_pinned is
+        // populated before we return.
+        tls.flush().map_err(|e| {
+            map_tls_error(
+                rustls::Error::General(format!("TLS flush: {e}")),
+                &host_port,
+            )
+        })?;
         let new_fp = newly_pinned.lock().unwrap().take();
         Ok((Self::from_transport(Box::new(tls)), new_fp))
     }

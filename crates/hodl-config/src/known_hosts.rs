@@ -107,17 +107,6 @@ impl KnownHosts {
     }
 }
 
-/// Compute the SHA-256 fingerprint of a certificate's DER bytes.
-///
-/// Returns a lowercase hex string with no separators (64 characters).
-/// Used both by the TOFU verifier (to pin the server cert on first connect)
-/// and by any tooling that needs to verify a pinned value out-of-band.
-pub fn fingerprint_sha256(cert_der: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(cert_der);
-    hex::encode(hash)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,32 +134,6 @@ mod tests {
         assert_eq!(loaded.entries.len(), 2);
         assert_eq!(loaded.get("electrum.example.com:50002"), Some("aabbcc"));
         assert_eq!(loaded.get("electrum2.example.com:50002"), Some("ddeeff"));
-    }
-
-    #[test]
-    fn fingerprint_sha256_deterministic() {
-        // SHA-256 of the single byte 0x00 is a known vector.
-        let fp = fingerprint_sha256(&[0x00]);
-        assert_eq!(
-            fp,
-            "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
-        );
-        // Length is always 64 hex chars.
-        assert_eq!(fp.len(), 64);
-
-        // Same input → same output (deterministic).
-        let fp2 = fingerprint_sha256(&[0x00]);
-        assert_eq!(fp, fp2);
-    }
-
-    #[test]
-    fn fingerprint_sha256_empty_input() {
-        // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-        let fp = fingerprint_sha256(&[]);
-        assert_eq!(
-            fp,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
     }
 
     #[test]
