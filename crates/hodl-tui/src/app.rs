@@ -164,11 +164,24 @@ impl App {
                         }
                         LockOutcome::Unlocked(u) => {
                             self.unlocked = Some(u);
-                            let mut acc_state = self.make_accounts();
-                            if let Some(unlocked) = &self.unlocked {
-                                acc_state.load_accounts(unlocked);
-                            }
+                            // Draw the empty Accounts screen first so the
+                            // "loading accounts…" placeholder replaces the
+                            // lingering "decrypting…" spinner from the lock
+                            // screen *before* the blocking Electrum fetch
+                            // begins. Otherwise the spinner stays on screen
+                            // for the full balance-query duration.
+                            let acc_state = self.make_accounts();
                             self.screen = Screen::Accounts(Box::new(acc_state));
+                            terminal.draw(|f| {
+                                if let Screen::Accounts(s) = &mut self.screen {
+                                    account::draw(f, f.area(), s);
+                                }
+                            })?;
+                            if let (Screen::Accounts(s), Some(unlocked)) =
+                                (&mut self.screen, &self.unlocked)
+                            {
+                                s.load_accounts(unlocked);
+                            }
                         }
                     }
                 }
