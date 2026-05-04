@@ -191,7 +191,7 @@ impl App {
                     // While a background load is in flight, reset `last_activity`
                     // so the idle timeout cannot fire mid-load.
                     if let Screen::Accounts(s) = &self.screen
-                        && s.is_loading()
+                        && s.is_scanning()
                     {
                         self.last_activity = Instant::now();
                     }
@@ -205,7 +205,7 @@ impl App {
                     // If data just arrived we redraw immediately; if still empty
                     // we fall through to event::poll with the short timeout.
                     if let Screen::Accounts(s) = &mut self.screen
-                        && s.poll_load()
+                        && s.poll_scan()
                     {
                         // State changed (rows arrived or error) — redraw.
                         terminal.draw(|f| {
@@ -217,7 +217,7 @@ impl App {
 
                     // Use a short timeout while loading so the spinner animates
                     // smoothly; fall back to 250 ms when idle.
-                    let loading = matches!(&self.screen, Screen::Accounts(s) if s.is_loading());
+                    let loading = matches!(&self.screen, Screen::Accounts(s) if s.is_scanning());
                     let wait = if loading {
                         Duration::from_millis(80)
                     } else {
@@ -268,8 +268,8 @@ impl App {
                         Screen::Accounts(s) => {
                             if let Event::Key(k) = ev {
                                 if k.kind == KeyEventKind::Press {
-                                    // handle_key internally blocks row-dependent
-                                    // actions while is_loading() is true.
+                                    // handle_key blocks scan-dependent
+                                    // actions while is_scanning() is true.
                                     s.handle_key(k)
                                 } else {
                                     None
@@ -300,19 +300,13 @@ impl App {
                             let ab_state = AddressBookState::new(book, book_path);
                             self.screen = Screen::AddressBook(Box::new(ab_state));
                         }
-                        Some(AccountAction::OpenReceive(_)) => {
-                            // Resolve the best receive address from the scan (or
-                            // derive index 0 as fallback). The placeholder address
-                            // returned by handle_key is discarded here.
-                            let addr = if let (Screen::Accounts(s), Some(unlocked)) =
+                        Some(AccountAction::OpenReceive) => {
+                            // Resolve the best receive address from the scan
+                            // (first used receive, or derive 0 as fallback).
+                            if let (Screen::Accounts(s), Some(unlocked)) =
                                 (&self.screen, &self.unlocked)
+                                && let Some((addr, path)) = s.pick_receive(unlocked)
                             {
-                                s.pick_receive_address(unlocked)
-                            } else {
-                                None
-                            };
-                            if let Some(addr) = addr {
-                                let path = "m/84'/0'/0'/0/0".to_string();
                                 self.screen = Screen::Receive(ReceiveState::new(addr, path));
                             }
                         }

@@ -45,8 +45,9 @@ use crate::spinner::Spinner;
 /// Action emitted by the account screen to the parent app loop.
 #[derive(Debug)]
 pub enum AccountAction {
-    /// Navigate to the receive screen for the given address.
-    OpenReceive(Address),
+    /// Navigate to the receive screen — app.rs picks the address via
+    /// `pick_receive_address` (first used receive address, or derive 0).
+    OpenReceive,
     /// Navigate to the send screen for the given HD account.
     ///
     /// `chain` carries the currently-selected chain so `SendState` builds
@@ -112,11 +113,6 @@ impl AccountState {
         self.pending_scan.is_some()
     }
 
-    /// Kept for backward-compat with app.rs call sites that checked is_loading().
-    pub fn is_loading(&self) -> bool {
-        self.is_scanning()
-    }
-
     /// Tick the scanning spinner (called by the event loop on `TryRecvError::Empty`).
     pub fn tick_spinner(&mut self) {
         if let Some(ref mut s) = self.scanning_spinner {
@@ -160,11 +156,6 @@ impl AccountState {
                 false
             }
         }
-    }
-
-    /// Kept for backward-compat with app.rs call sites that called poll_load().
-    pub fn poll_load(&mut self) -> bool {
-        self.poll_scan()
     }
 
     /// Spawn a background thread to run the gap-limit scan.
@@ -213,23 +204,32 @@ impl AccountState {
         self.picker = Some(hjkl_picker::Picker::new(Box::new(source)));
     }
 
-    /// Pick the best receive address from the scan for the Receive screen.
+    /// Pick the best receive address + its derivation path for the Receive
+    /// screen.
     ///
-    /// Returns the first used receive address (change=0) if any exist; otherwise
-    /// falls back to deriving index 0.
-    pub fn pick_receive_address(&self, wallet: &UnlockedWallet) -> Option<Address> {
-        // Try first used receive address from scan.
+    /// Returns the first used receive address (change=0) if any exist;
+    /// otherwise falls back to deriving index 0. The path matches the chain's
+    /// actual purpose via `ActiveChain::derivation_path`.
+    pub fn pick_receive(&self, wallet: &UnlockedWallet) -> Option<(Address, String)> {
+        let active = ActiveChain::from_chain_id(self.current_chain, &self.config).ok()?;
+
+        // Try first used receive address (change=0) from the scan.
         if let Some(scan) = &self.scan
             && let Some(used) = scan.used.iter().find(|u| u.change == 0)
         {
             let addr = Address::new(used.address.clone(), self.current_chain);
-            return Some(addr);
+            let path = active.derivation_path(0, used.index);
+            return Some((addr, path));
         }
 
-        // Fallback: derive index 0 from the wallet seed.
-        let seed: [u8; 64] = *wallet.seed().as_bytes();
-        let active = ActiveChain::from_chain_id(self.current_chain, &self.config).ok()?;
-        active.derive(&seed, 0, 0).ok()
+        // Fallback: derive index 0 from the wallet seed. Zeroize the local
+        // copy once the derive returns (see AGENTS.md security rules).
+        let mut seed: [u8; 64] = *wallet.seed().as_bytes();
+        let result = active.derive(&seed, 0, 0).ok();
+        seed.zeroize();
+        let addr = result?;
+        let path = active.derivation_path(0, 0);
+        Some((addr, path))
     }
 
     /// Keybind reference for the contextual help overlay.
@@ -252,19 +252,6 @@ impl AccountState {
     /// `r`/`s`/`b`/`d` are blocked while `is_scanning()` is true.
     /// `q`, `S`, `p`, Ctrl-C/D, and `?` always work.
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<AccountAction> {
-        // We need the wallet for picking a receive address, but handle_key
-        // doesn't take a wallet parameter — so for `r` we return the action
-        // with a placeholder and let app.rs do the derivation. Actually, we
-        // store a cached address approach — but app.rs re-reads from AccountState.
-        // The cleanest solution: return OpenReceive with a lazy flag.
-        // Per the spec we return OpenReceive(addr) — app.rs calls pick_receive_address.
-        // Since handle_key doesn't have wallet, we cache the address differently.
-        // This is handled via a separate method called from app.rs.
-        // So handle_key returns a special variant and app.rs picks the address.
-        self.handle_key_inner(key)
-    }
-
-    fn handle_key_inner(&mut self, key: KeyEvent) -> Option<AccountAction> {
         // Ctrl-C / Ctrl-D quit.
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
@@ -298,12 +285,7 @@ impl AccountState {
         match key.code {
             // Actions below are blocked while a scan is in flight.
             KeyCode::Char('r') if !self.is_scanning() => {
-                // App-level routing will call pick_receive_address_with_wallet.
-                // We signal the action; app.rs does the address lookup.
-                return Some(AccountAction::OpenReceive(Address::new(
-                    "__pending__".to_string(),
-                    self.current_chain,
-                )));
+                return Some(AccountAction::OpenReceive);
             }
             KeyCode::Char('s') if !self.is_scanning() => {
                 let total_balance_sats = self.scan.as_ref().map(|s| s.total.total()).unwrap_or(0);
