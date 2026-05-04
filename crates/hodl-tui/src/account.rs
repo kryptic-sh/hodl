@@ -63,10 +63,7 @@ enum ScanEvent {
     Reset { attempt: u32 },
 }
 
-/// Maximum scan attempts before giving up. Each attempt rebuilds the
-/// `ActiveChain` (via `from_chain_id` → `try_endpoints`), which re-shuffles
-/// the endpoint list, so successive attempts try different servers.
-const MAX_SCAN_ATTEMPTS: u32 = 3;
+use crate::retry::{self, AttemptResult, MAX_ATTEMPTS as MAX_SCAN_ATTEMPTS};
 
 /// Action emitted by the account screen to the parent app loop.
 #[derive(Debug)]
@@ -499,18 +496,6 @@ fn scan_thread_streaming(
     }
 }
 
-/// Outcome of a single scan attempt against a freshly-built ActiveChain.
-enum AttemptResult {
-    /// Scan completed successfully — `ScanEvent::Done` was already sent.
-    Done,
-    /// Non-retryable error (config, codec, chain logic). Surface to UI as
-    /// the final scan_error and stop trying.
-    Fatal(String),
-    /// Retryable error (network/IO). Outer loop will reconnect to a
-    /// different server and try again.
-    Retry(String),
-}
-
 fn run_scan_attempt(
     chain: ChainId,
     ctx: &ScanCtx<'_>,
@@ -525,7 +510,7 @@ fn run_scan_attempt(
         Err(e) => {
             // Connect failure across all endpoints — try_endpoints already
             // retried internally, no point in retrying at this layer.
-            return classify(chain, "connect", e);
+            return retry::classify(chain, "connect", e);
         }
     };
 
@@ -540,7 +525,7 @@ fn run_scan_attempt(
                     let _ = tx.send(ScanEvent::Done(scan));
                     AttemptResult::Done
                 }
-                Err(e) => classify(chain, "scan", e),
+                Err(e) => retry::classify(chain, "scan", e),
             }
         }
         ActiveChain::Ethereum(eth_chain) => single_address_scan(chain, tx, || {
@@ -557,24 +542,6 @@ fn run_scan_attempt(
             let amount = xmr_chain.balance(&addr).map_err(|e| (e, "balance"))?;
             Ok((addr.as_str().to_string(), amount.atoms() as u64))
         }),
-    }
-}
-
-/// Map a `hodl_core::Error` into an `AttemptResult` via its retry-ability:
-/// network/IO failures retry; everything else is fatal.
-///
-/// `TofuMismatch` is always **fatal** — it is a security signal indicating
-/// the server's cert changed since first connect. Retrying would hide the
-/// signal and potentially connect to a different (clean) server, masking the
-/// mismatch. The user must investigate and manually remove the stale entry
-/// from `known_hosts.toml` before reconnecting.
-fn classify(chain: ChainId, stage: &str, e: hodl_core::error::Error) -> AttemptResult {
-    use hodl_core::error::Error;
-    let msg = format!("{}: {stage}: {e}", chain.display_name());
-    match e {
-        Error::TofuMismatch { .. } => AttemptResult::Fatal(msg),
-        Error::Network(_) | Error::Io(_) | Error::Endpoint(_) => AttemptResult::Retry(msg),
-        Error::Codec(_) | Error::Chain(_) | Error::Config(_) => AttemptResult::Fatal(msg),
     }
 }
 
@@ -607,7 +574,7 @@ fn single_address_scan(
             }));
             AttemptResult::Done
         }
-        Err((e, stage)) => classify(chain, stage, e),
+        Err((e, stage)) => retry::classify(chain, stage, e),
     }
 }
 

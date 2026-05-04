@@ -40,6 +40,35 @@ and this project adheres to
   new fingerprint will be pinned automatically. If you did not expect a cert
   change, investigate before reconnecting (potential MitM).
 
+- **Send build/broadcast retry on transient network failures.** Both the build
+  phase (`estimate_fee` + `build_send`) and the broadcast phase now retry up to
+  3 times on transient network errors (`Network` / `Io` / `Endpoint`). Each
+  retry calls `ActiveChain::from_chain_id` again, which re-shuffles the endpoint
+  list via `try_endpoints`, so successive attempts contact different servers.
+  `Codec` / `Chain` / `Config` errors and `TofuMismatch` remain fatal and do not
+  retry.
+
+  Broadcast is now structured as **sign-once-then-retry-broadcast**:
+  `ActiveChain::sign_and_broadcast` is split into `sign_only` (local, no network
+  — runs once, seed is zeroized immediately after) and `broadcast_only` (network
+  — runs in the retry loop with the cached `SignedTx` cloned per attempt). This
+  means a transient broadcast failure (peer drops mid-write, TLS reset, etc.)
+  actually re-broadcasts the same signed bytes against a fresh endpoint instead
+  of giving up after the first network blip — which is the dominant transient
+  failure mode for sends.
+
+  The status spinner during building and broadcasting gains an `(attempt N/3)`
+  suffix on the second and third attempts, matching the existing scan UX (worker
+  publishes the current attempt via `Arc<AtomicU32>`). After all attempts are
+  exhausted the error reads `all 3 endpoints failed — last: <reason>`.
+
+  Shared retry primitives (`AttemptResult`, `classify`, `MAX_ATTEMPTS`) are
+  extracted from `account.rs` into a new `hodl-tui::retry` module consumed by
+  both `account.rs` and `send.rs`. Zeroize discipline is preserved: the seed
+  reference stays live across build retries (no extra copies per attempt), and
+  `broadcast_thread` zeroizes `payload.seed` immediately after `sign_only`
+  returns — so the broadcast retry loop never holds a live seed.
+
 - **Streaming wallet scan with live summary updates.** The Accounts summary card
   now updates incrementally as each used address is discovered, instead of
   showing only a spinner for the full scan duration.

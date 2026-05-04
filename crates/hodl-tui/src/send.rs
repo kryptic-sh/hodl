@@ -23,6 +23,7 @@
 //! build phase (the build thread has already captured the values).
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 
@@ -48,6 +49,7 @@ use hodl_wallet::UnlockedWallet;
 
 use crate::active_chain::{ActiveChain, PreparedSend, SendOpts};
 use crate::help::{HelpAction, HelpOverlay};
+use crate::retry::{self, MAX_ATTEMPTS as MAX_SEND_ATTEMPTS};
 use crate::spinner::Spinner;
 
 // ── Field indices ──────────────────────────────────────────────────────────
@@ -187,12 +189,30 @@ struct BroadcastPayload {
 
 // ── State machine ──────────────────────────────────────────────────────────
 
+/// Outcome of one send attempt (build or broadcast). Parallel to
+/// `retry::AttemptResult` but carries a success value `T` on `Done` so the
+/// send threads can return their result by value rather than via a channel.
+enum SendAttempt<T> {
+    /// Attempt succeeded; carry the result.
+    Done(T),
+    /// Non-retryable error; stop immediately.
+    Fatal(String),
+    /// Retryable error; outer loop will try again.
+    Retry(String),
+}
+
 enum Phase {
     Form,
-    /// Off-thread: estimate_fee + build_send. Carries the channel + spinner.
-    Building(Receiver<Result<BroadcastPayload, String>>, Spinner),
-    /// Off-thread: sign_and_broadcast. Carries the channel + spinner.
-    Broadcasting(Receiver<Result<String, String>>, Spinner),
+    /// Off-thread: estimate_fee + build_send. Carries the channel, spinner,
+    /// and an atomic attempt counter updated by the worker on each retry.
+    Building(
+        Receiver<Result<BroadcastPayload, String>>,
+        Spinner,
+        Arc<AtomicU32>,
+    ),
+    /// Off-thread: sign_and_broadcast. Carries the channel, spinner, and
+    /// an atomic attempt counter updated by the worker on each retry.
+    Broadcasting(Receiver<Result<String, String>>, Spinner, Arc<AtomicU32>),
     /// Broadcast succeeded; hold TxId string.
     Result(String),
     /// Submit failed; error message.
@@ -265,7 +285,7 @@ impl SendState {
     pub fn is_busy(&self) -> bool {
         matches!(
             self.phase,
-            Phase::Building(_, _) | Phase::Broadcasting(_, _)
+            Phase::Building(_, _, _) | Phase::Broadcasting(_, _, _)
         )
     }
 
@@ -273,16 +293,18 @@ impl SendState {
     pub fn poll(&mut self) -> bool {
         use std::sync::mpsc::TryRecvError;
         match &mut self.phase {
-            Phase::Building(rx, spinner) => {
+            Phase::Building(rx, spinner, _attempt) => {
                 match rx.try_recv() {
                     Ok(Ok(payload)) => {
                         // Build succeeded — kick off broadcast thread.
                         let (tx, brx) = mpsc::channel();
+                        let bcast_attempt = Arc::new(AtomicU32::new(1));
+                        let bcast_attempt_worker = Arc::clone(&bcast_attempt);
                         std::thread::spawn(move || {
-                            let result = broadcast_thread(payload);
+                            let result = broadcast_thread(payload, bcast_attempt_worker);
                             let _ = tx.send(result);
                         });
-                        self.phase = Phase::Broadcasting(brx, Spinner::new());
+                        self.phase = Phase::Broadcasting(brx, Spinner::new(), bcast_attempt);
                         true
                     }
                     Ok(Err(msg)) => {
@@ -299,7 +321,7 @@ impl SendState {
                     }
                 }
             }
-            Phase::Broadcasting(rx, spinner) => match rx.try_recv() {
+            Phase::Broadcasting(rx, spinner, _attempt) => match rx.try_recv() {
                 Ok(Ok(txid)) => {
                     self.phase = Phase::Result(txid);
                     true
@@ -346,7 +368,7 @@ impl SendState {
                     ]
                 }
             }
-            Phase::Building(_, _) | Phase::Broadcasting(_, _) => vec![
+            Phase::Building(_, _, _) | Phase::Broadcasting(_, _, _) => vec![
                 ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
                 ("F1".into(), "Show this help".into()),
             ],
@@ -423,6 +445,8 @@ impl SendState {
         let data_root = self.data_root.clone();
 
         let (tx, rx) = mpsc::channel();
+        let build_attempt = Arc::new(AtomicU32::new(1));
+        let build_attempt_worker = Arc::clone(&build_attempt);
         std::thread::spawn(move || {
             // Mutable rebinding so we can zeroize the actual captured array
             // (not a fresh Copy) after the worker returns. The build_thread
@@ -440,20 +464,70 @@ impl SendState {
                 chain_cfg.gap_limit,
                 &known_hosts,
                 &data_root,
+                build_attempt_worker,
             );
             seed.zeroize();
             let _ = tx.send(result);
         });
 
-        self.phase = Phase::Building(rx, Spinner::new());
+        self.phase = Phase::Building(rx, Spinner::new(), build_attempt);
     }
 }
 
 // ── Worker functions ────────────────────────────────────────────────────────
 
 /// Build thread: open chain, estimate fee, build_send. Returns a `BroadcastPayload`.
+/// Retries up to `MAX_SEND_ATTEMPTS` times on transient network errors.
 #[allow(clippy::too_many_arguments)]
 fn build_thread(
+    chain: ChainId,
+    config: &Config,
+    seed: &[u8; 64],
+    account: u32,
+    send_params: hodl_core::SendParams,
+    fee_target: u32,
+    custom_fee_sats: Option<u64>,
+    rbf: bool,
+    gap_limit: u32,
+    known_hosts: &Arc<Mutex<KnownHosts>>,
+    data_root: &std::path::Path,
+    attempt_counter: Arc<AtomicU32>,
+) -> Result<BroadcastPayload, String> {
+    debug!("build_thread for chain {:?}", chain);
+
+    for attempt in 1..=MAX_SEND_ATTEMPTS {
+        attempt_counter.store(attempt, Ordering::Relaxed);
+        match try_build_once(
+            chain,
+            config,
+            seed,
+            account,
+            send_params.clone(),
+            fee_target,
+            custom_fee_sats,
+            rbf,
+            gap_limit,
+            known_hosts,
+            data_root,
+        ) {
+            SendAttempt::Done(payload) => return Ok(payload),
+            SendAttempt::Fatal(msg) => return Err(msg),
+            SendAttempt::Retry(reason) => {
+                debug!("build attempt {attempt} failed: {reason}; retrying");
+                if attempt == MAX_SEND_ATTEMPTS {
+                    return Err(format!(
+                        "all {MAX_SEND_ATTEMPTS} endpoints failed — last: {reason}"
+                    ));
+                }
+            }
+        }
+    }
+    unreachable!("loop always returns before exhausting attempts")
+}
+
+/// One attempt at building a transaction. Never retries internally.
+#[allow(clippy::too_many_arguments)]
+fn try_build_once(
     chain: ChainId,
     config: &Config,
     seed: &[u8; 64],
@@ -465,52 +539,69 @@ fn build_thread(
     gap_limit: u32,
     known_hosts: &Arc<Mutex<KnownHosts>>,
     data_root: &std::path::Path,
-) -> Result<BroadcastPayload, String> {
-    debug!("build_thread for chain {:?}", chain);
-
-    let active = ActiveChain::from_chain_id(chain, config, known_hosts, data_root)
-        .map_err(|e| format!("chain connect: {e}"))?;
+) -> SendAttempt<BroadcastPayload> {
+    let active = match ActiveChain::from_chain_id(chain, config, known_hosts, data_root) {
+        Ok(a) => a,
+        Err(e) => return send_classify(chain, "connect", e),
+    };
 
     let fee_rate = if let Some(sats) = custom_fee_sats {
         FeeRate::SatsPerVbyte { sats, chain }
     } else {
         debug!("estimating fee for {fee_target} blocks on {chain:?}");
-        active
-            .estimate_fee(fee_target)
-            .map_err(|e| format!("fee estimate failed: {e}"))?
+        match active.estimate_fee(fee_target) {
+            Ok(r) => r,
+            Err(e) => return send_classify(chain, "fee estimate", e),
+        }
     };
 
     send_params.fee = fee_rate;
 
     debug!("build_send for account {account} on {chain:?}");
-    let prepared = active
-        .build_send(seed, account, &send_params, SendOpts { rbf, gap_limit })
-        .map_err(|e| format!("build: {e}"))?;
-
-    Ok(BroadcastPayload {
-        chain,
-        config: config.clone(),
-        seed: *seed,
-        account,
-        send_params,
-        prepared,
-        known_hosts: Arc::clone(known_hosts),
-        data_root: data_root.to_path_buf(),
-    })
+    match active.build_send(seed, account, &send_params, SendOpts { rbf, gap_limit }) {
+        Ok(prepared) => SendAttempt::Done(BroadcastPayload {
+            chain,
+            config: config.clone(),
+            seed: *seed,
+            account,
+            send_params,
+            prepared,
+            known_hosts: Arc::clone(known_hosts),
+            data_root: data_root.to_path_buf(),
+        }),
+        Err(e) => send_classify(chain, "build", e),
+    }
 }
 
-/// Broadcast thread: sign + broadcast. Returns the TxId string.
+/// Broadcast thread: sign **once**, then broadcast with retry. Returns the
+/// TxId string.
 ///
-/// Zeroizes `payload.seed` on every exit path — both the success return and
-/// any error from chain-connect or sign/broadcast — so a failed broadcast
+/// The signing step is deterministic and local (no network), so it runs
+/// outside the retry loop: on success the seed is immediately zeroized and
+/// the resulting `SignedTx` (raw bytes, `Clone`-able) is what we re-submit
+/// against alternate endpoints on broadcast failure.
+///
+/// Connect or broadcast errors classified as retryable trigger a fresh
+/// `ActiveChain::from_chain_id` (which re-shuffles endpoints) up to
+/// `MAX_SEND_ATTEMPTS` times. The signed bytes are reused — re-signing on
+/// retry would waste CPU and would not change the tx (deterministic).
+///
+/// Zeroizes `payload.seed` on **every** exit path so a failed broadcast
 /// doesn't leave a live seed copy in dropped stack memory.
-fn broadcast_thread(mut payload: BroadcastPayload) -> Result<String, String> {
+fn broadcast_thread(
+    mut payload: BroadcastPayload,
+    attempt_counter: Arc<AtomicU32>,
+) -> Result<String, String> {
     debug!("broadcast_thread for chain {:?}", payload.chain);
 
-    // `prepared` consumes by value; once it's moved into sign_and_broadcast we
-    // can't unwind back to a "still have it" state. Zeroize after the call
-    // returns regardless of success/failure.
-    let active = match ActiveChain::from_chain_id(
+    // ── Phase 1: connect once + sign locally ────────────────────────────────
+    //
+    // Signing needs `&self` on the BitcoinChain/EthereumChain wrapper, so
+    // we have to build an ActiveChain to sign. The connection that ships
+    // with it is then thrown away — broadcasting will reconnect anyway so
+    // each attempt picks a fresh server via `try_endpoints`.
+    attempt_counter.store(1, Ordering::Relaxed);
+    let signing_chain = match ActiveChain::from_chain_id(
         payload.chain,
         &payload.config,
         &payload.known_hosts,
@@ -519,19 +610,83 @@ fn broadcast_thread(mut payload: BroadcastPayload) -> Result<String, String> {
         Ok(a) => a,
         Err(e) => {
             payload.seed.zeroize();
-            return Err(format!("chain connect: {e}"));
+            return match send_classify(payload.chain, "connect", e) {
+                SendAttempt::Done(_) => unreachable!(),
+                SendAttempt::Fatal(msg) | SendAttempt::Retry(msg) => Err(msg),
+            };
         }
     };
-    let txid_result = active.sign_and_broadcast(
+
+    let signed = match signing_chain.sign_only(
         &payload.seed,
         payload.account,
         &payload.send_params,
         payload.prepared,
-    );
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            payload.seed.zeroize();
+            // Sign failures are always fatal — re-trying with a different
+            // server won't change the result (signing is local and
+            // deterministic).
+            return Err(format!("{}: sign: {e}", payload.chain.display_name()));
+        }
+    };
+    // Seed is no longer needed once signing is done. Zero it immediately
+    // so the broadcast retry loop can't accidentally leak it.
     payload.seed.zeroize();
-    match txid_result {
-        Ok(txid) => Ok(txid.0),
-        Err(e) => Err(format!("sign/broadcast: {e}")),
+    drop(signing_chain);
+
+    // ── Phase 2: broadcast with retry against fresh endpoints ───────────────
+    let mut last_reason: Option<String> = None;
+    for attempt in 1..=MAX_SEND_ATTEMPTS {
+        attempt_counter.store(attempt, Ordering::Relaxed);
+        let active = match ActiveChain::from_chain_id(
+            payload.chain,
+            &payload.config,
+            &payload.known_hosts,
+            &payload.data_root,
+        ) {
+            Ok(a) => a,
+            Err(e) => match send_classify(payload.chain, "connect", e) {
+                SendAttempt::Done(_) => unreachable!(),
+                SendAttempt::Fatal(msg) => return Err(msg),
+                SendAttempt::Retry(reason) => {
+                    debug!("broadcast attempt {attempt} connect failed: {reason}");
+                    last_reason = Some(reason);
+                    continue;
+                }
+            },
+        };
+
+        match active.broadcast_only(signed.clone()) {
+            Ok(txid) => return Ok(txid.0),
+            Err(e) => match send_classify(payload.chain, "broadcast", e) {
+                SendAttempt::Done(_) => unreachable!(),
+                SendAttempt::Fatal(msg) => return Err(msg),
+                SendAttempt::Retry(reason) => {
+                    debug!("broadcast attempt {attempt} failed: {reason}");
+                    last_reason = Some(reason);
+                }
+            },
+        }
+    }
+    let reason = last_reason.unwrap_or_else(|| "no detail".into());
+    Err(format!(
+        "all {MAX_SEND_ATTEMPTS} endpoints failed — last: {reason}"
+    ))
+}
+
+/// Classify a `hodl_core::Error` for a send attempt (build or connect stage).
+fn send_classify(
+    chain: ChainId,
+    stage: &str,
+    e: hodl_core::error::Error,
+) -> SendAttempt<BroadcastPayload> {
+    match retry::classify(chain, stage, e) {
+        crate::retry::AttemptResult::Done => unreachable!(),
+        crate::retry::AttemptResult::Fatal(msg) => SendAttempt::Fatal(msg),
+        crate::retry::AttemptResult::Retry(msg) => SendAttempt::Retry(msg),
     }
 }
 
@@ -711,7 +866,7 @@ pub fn draw(f: &mut ratatui::Frame, state: &mut SendState) {
     match &state.phase {
         Phase::Result(txid) => draw_result(f, area, txid.clone()),
         Phase::Error(msg) => draw_error(f, area, msg.clone(), state),
-        Phase::Building(_, _) | Phase::Broadcasting(_, _) => draw_busy(f, area, state),
+        Phase::Building(_, _, _) | Phase::Broadcasting(_, _, _) => draw_busy(f, area, state),
         Phase::Form => draw_form_phase(f, area, state),
     }
 }
@@ -754,11 +909,18 @@ fn draw_form_phase(f: &mut ratatui::Frame, area: Rect, state: &mut SendState) {
 
 /// Render the form in the background with a spinner overlay at the bottom.
 fn draw_busy(f: &mut ratatui::Frame, area: Rect, state: &mut SendState) {
-    let (label, spinner) = match &state.phase {
-        Phase::Building(_, s) => ("building…", s),
-        Phase::Broadcasting(_, s) => ("broadcasting…", s),
+    let (base_label, spinner, attempt) = match &state.phase {
+        Phase::Building(_, s, a) => ("building…", s, a.load(Ordering::Relaxed)),
+        Phase::Broadcasting(_, s, a) => ("broadcasting…", s, a.load(Ordering::Relaxed)),
         _ => return,
     };
+    let attempt_suffix = if attempt > 1 {
+        format!(" (attempt {attempt}/{MAX_SEND_ATTEMPTS})")
+    } else {
+        String::new()
+    };
+    let label_owned = format!("{base_label}{attempt_suffix}");
+    let label = label_owned.as_str();
 
     let block = Block::default()
         .title(format!(

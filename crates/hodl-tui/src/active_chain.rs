@@ -10,7 +10,7 @@ use hodl_chain_ethereum::{EthRpcClient, EthereumChain, NetworkParams as EthNetwo
 use hodl_chain_monero::{LwsClient, MoneroChain, NetworkParams as XmrNetworkParams};
 use hodl_config::{Config, Endpoint, KnownHosts};
 use hodl_core::error::{Error, Result};
-use hodl_core::{Address, Amount, Chain, ChainId, FeeRate, SendParams, TxId, UnsignedTx};
+use hodl_core::{Address, Amount, Chain, ChainId, FeeRate, SendParams, SignedTx, TxId, UnsignedTx};
 use rand::seq::SliceRandom;
 
 pub enum ActiveChain {
@@ -198,6 +198,21 @@ impl ActiveChain {
         params: &SendParams,
         prepared: PreparedSend,
     ) -> Result<TxId> {
+        let signed = self.sign_only(seed, account, params, prepared)?;
+        self.broadcast_only(signed)
+    }
+
+    /// Sign the prepared transaction **without** broadcasting. Pure-local
+    /// (no network); intended to be paired with one or more
+    /// [`broadcast_only`](Self::broadcast_only) calls so a failed broadcast
+    /// can be retried against a different endpoint without re-signing.
+    pub fn sign_only(
+        &self,
+        seed: &[u8; 64],
+        account: u32,
+        params: &SendParams,
+        prepared: PreparedSend,
+    ) -> Result<SignedTx> {
         match (self, prepared) {
             (
                 ActiveChain::Bitcoin(c),
@@ -207,17 +222,26 @@ impl ActiveChain {
                     change_sats,
                     rbf,
                 },
-            ) => {
-                let signed =
-                    c.sign_multi_source(seed, account, params, rbf, &hints, &utxos, change_sats)?;
-                c.broadcast(signed)
-            }
+            ) => c.sign_multi_source(seed, account, params, rbf, &hints, &utxos, change_sats),
             (ActiveChain::Ethereum(c), PreparedSend::Ethereum { unsigned }) => {
                 let key = c.derive_private_key(seed, account, 0, 0)?;
-                let signed = c.sign(unsigned, &key)?;
-                c.broadcast(signed)
+                c.sign(unsigned, &key)
             }
             _ => Err(Error::Chain("send-prepared/chain mismatch".into())),
+        }
+    }
+
+    /// Broadcast a previously-signed transaction. Independent from
+    /// [`sign_only`](Self::sign_only) so a transient network failure here
+    /// can be retried against a different endpoint with the same signed
+    /// bytes (no re-signing needed; the transaction is final once signed).
+    pub fn broadcast_only(&self, signed: SignedTx) -> Result<TxId> {
+        match self {
+            ActiveChain::Bitcoin(c) => c.broadcast(signed),
+            ActiveChain::Ethereum(c) => c.broadcast(signed),
+            ActiveChain::Monero(_) => Err(Error::Chain(
+                "broadcast not implemented for Monero (LWS path)".into(),
+            )),
         }
     }
 }
