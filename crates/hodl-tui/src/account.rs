@@ -172,15 +172,17 @@ impl AccountState {
 
         let chain = self.current_chain;
         let config = self.config.clone();
-        // Extract seed bytes to move into the thread. [u8; 64] is Copy + Send.
+        // Extract seed bytes to move into the thread. [u8; 64] is Copy + Send;
+        // we zeroize the closure-captured copy explicitly before the thread exits.
         let seed: [u8; 64] = *wallet.seed().as_bytes();
 
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = load_accounts_thread(chain, &config, seed);
-            // Zeroize our local copy before the thread exits.
-            let mut seed_copy = seed;
-            seed_copy.zeroize();
+            // Mutable rebinding so we can zeroize the actual captured array
+            // (not a fresh Copy) after the worker returns.
+            let mut seed = seed;
+            let result = load_accounts_thread(chain, &config, &seed);
+            seed.zeroize();
             let _ = tx.send(result);
         });
 
@@ -309,7 +311,7 @@ impl AccountState {
 fn load_accounts_thread(
     chain: ChainId,
     config: &Config,
-    seed: [u8; 64],
+    seed: &[u8; 64],
 ) -> Result<Vec<AccountRow>, String> {
     debug!("load_accounts_thread for chain {:?}", chain);
 
@@ -320,7 +322,7 @@ fn load_accounts_thread(
     let mut rows = Vec::new();
 
     for index in 0..5u32 {
-        let addr = match active.derive(&seed, 0, index) {
+        let addr = match active.derive(seed, 0, index) {
             Ok(a) => a,
             Err(e) => {
                 debug!("derive {index} failed: {e}");

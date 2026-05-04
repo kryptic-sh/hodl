@@ -405,10 +405,14 @@ impl SendState {
 
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
+            // Mutable rebinding so we can zeroize the actual captured array
+            // (not a fresh Copy) after the worker returns. The build_thread
+            // takes `&[u8; 64]` so it doesn't make its own stack copy.
+            let mut seed = seed;
             let result = build_thread(
                 chain,
                 &config,
-                seed,
+                &seed,
                 account,
                 send_params,
                 fee_target,
@@ -416,9 +420,7 @@ impl SendState {
                 rbf,
                 chain_cfg.gap_limit,
             );
-            // Zeroize local seed copy before thread exits.
-            let mut seed_copy = seed;
-            seed_copy.zeroize();
+            seed.zeroize();
             let _ = tx.send(result);
         });
 
@@ -433,7 +435,7 @@ impl SendState {
 fn build_thread(
     chain: ChainId,
     config: &Config,
-    seed: [u8; 64],
+    seed: &[u8; 64],
     account: u32,
     mut send_params: hodl_core::SendParams,
     fee_target: u32,
@@ -459,13 +461,13 @@ fn build_thread(
 
     debug!("build_send for account {account} on {chain:?}");
     let prepared = active
-        .build_send(&seed, account, &send_params, SendOpts { rbf, gap_limit })
+        .build_send(seed, account, &send_params, SendOpts { rbf, gap_limit })
         .map_err(|e| format!("build: {e}"))?;
 
     Ok(BroadcastPayload {
         chain,
         config: config.clone(),
-        seed,
+        seed: *seed,
         account,
         send_params,
         prepared,
@@ -473,25 +475,34 @@ fn build_thread(
 }
 
 /// Broadcast thread: sign + broadcast. Returns the TxId string.
+///
+/// Zeroizes `payload.seed` on every exit path — both the success return and
+/// any error from chain-connect or sign/broadcast — so a failed broadcast
+/// doesn't leave a live seed copy in dropped stack memory.
 fn broadcast_thread(mut payload: BroadcastPayload) -> Result<String, String> {
     debug!("broadcast_thread for chain {:?}", payload.chain);
 
-    let active = ActiveChain::from_chain_id(payload.chain, &payload.config)
-        .map_err(|e| format!("chain connect: {e}"))?;
-
-    let txid = active
-        .sign_and_broadcast(
-            &payload.seed,
-            payload.account,
-            &payload.send_params,
-            payload.prepared,
-        )
-        .map_err(|e| format!("sign/broadcast: {e}"))?;
-
-    // Zeroize seed before returning.
+    // `prepared` consumes by value; once it's moved into sign_and_broadcast we
+    // can't unwind back to a "still have it" state. Zeroize after the call
+    // returns regardless of success/failure.
+    let active = match ActiveChain::from_chain_id(payload.chain, &payload.config) {
+        Ok(a) => a,
+        Err(e) => {
+            payload.seed.zeroize();
+            return Err(format!("chain connect: {e}"));
+        }
+    };
+    let txid_result = active.sign_and_broadcast(
+        &payload.seed,
+        payload.account,
+        &payload.send_params,
+        payload.prepared,
+    );
     payload.seed.zeroize();
-
-    Ok(txid.0)
+    match txid_result {
+        Ok(txid) => Ok(txid.0),
+        Err(e) => Err(format!("sign/broadcast: {e}")),
+    }
 }
 
 // ── Form builder ───────────────────────────────────────────────────────────
