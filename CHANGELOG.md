@@ -85,6 +85,18 @@ and this project adheres to
 
 ### Added
 
+- **Send-screen address-book picker.** While focused on the recipient field in
+  Normal mode, **Ctrl+B** opens a centred picker overlay listing saved contacts
+  whose `chain` matches the active send chain (other chains' contacts are
+  filtered out — an ETH contact will not appear in a BTC send). Selecting a
+  contact writes its address into the recipient field and closes the overlay;
+  `Esc` cancels with no change. If no contacts match the active chain a yellow
+  flash on the form footer reads `no contacts for <Chain>`. Picker reuses the
+  same `hjkl-picker` overlay style as the chain switcher and wallet switcher;
+  the new `ContactPickerSource` shows `<label> — <short address>` per row
+  (middle-truncated for addresses >16 chars) and matches against the full
+  address for fuzzy search.
+
 - **Streaming Addresses sub-view.** Pressing `d` on the Accounts screen now
   opens the Addresses table immediately as soon as **any** used address has been
   discovered — either from a completed scan or from the in-flight partial

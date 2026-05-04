@@ -368,18 +368,11 @@ get re-prioritised.
   assumes 8 decimals (BTC family). Wrong for ETH (18) and Monero (12); not yet
   visible because EVM/Monero scans degenerate to a single row, but will surface
   when those chains support multi-row display.
-- **Send build/broadcast retry-on-failure.** The scan worker retries up to 3
-  times on `Network`/`Io`/`Endpoint` errors via `try_endpoints` re-shuffle.
-  `send.rs::build_thread` and `broadcast_thread` are still single-attempt — a
-  network blip mid-broadcast bails. Apply the same pattern.
 - **TOFU mismatch UX.** Today a fingerprint mismatch surfaces as a red
   status-line error pointing at `known_hosts.toml`. A guided remediation flow
   (show old vs new fingerprint, offer "trust new" / "stay pinned" / "abort"
   prompts) would be friendlier — and would let a user re-pin without editing
   TOML by hand.
-- **Send-screen address book picker.** Wire `hjkl-picker` into the recipient
-  field so the user can select from saved contacts instead of typing the
-  address.
 
 ### Per-chain scan strategies
 

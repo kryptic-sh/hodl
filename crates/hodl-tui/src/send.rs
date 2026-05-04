@@ -23,9 +23,11 @@
 //! build phase (the build thread has already captured the values).
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -33,15 +35,16 @@ use hjkl_form::{
     CheckboxField, Field, FieldMeta, Form, FormMode, Input, SelectField, SubmitField,
     TextFieldEditor, Validator,
 };
+use hjkl_picker::{PickerAction, PickerEvent, PickerLogic};
 use hjkl_ratatui::form::{FormPalette, draw_form};
-use hodl_config::{Config, KnownHosts};
+use hodl_config::{AddressBook, Config, Contact, KnownHosts};
 use hodl_core::{Address, Amount, ChainId, FeeRate};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use tracing::debug;
 use zeroize::Zeroize;
 
@@ -223,6 +226,9 @@ pub struct SendState {
     config: Config,
     known_hosts: Arc<Mutex<KnownHosts>>,
     data_root: PathBuf,
+    book: AddressBook,
+    book_picker: Option<hjkl_picker::Picker>,
+    flash: Option<String>,
 }
 
 impl SendState {
@@ -235,6 +241,9 @@ impl SendState {
         data_root: PathBuf,
     ) -> Self {
         let form = make_send_form(chain, total_balance_sats);
+        let book_path =
+            AddressBook::default_path().unwrap_or_else(|_| data_root.join("address_book.toml"));
+        let book = AddressBook::load(&book_path).unwrap_or_default();
         Self {
             chain,
             account,
@@ -244,7 +253,73 @@ impl SendState {
             config,
             known_hosts,
             data_root,
+            book,
+            book_picker: None,
+            flash: None,
         }
+    }
+
+    #[cfg(test)]
+    fn new_with_book(chain: ChainId, total_balance_sats: u64, book: AddressBook) -> Self {
+        let form = make_send_form(chain, total_balance_sats);
+        Self {
+            chain,
+            account: 0,
+            total_balance_sats,
+            form,
+            phase: Phase::Form,
+            config: Config::default(),
+            known_hosts: Arc::new(Mutex::new(KnownHosts::default())),
+            data_root: PathBuf::from("/tmp"),
+            book,
+            book_picker: None,
+            flash: None,
+        }
+    }
+
+    /// Open the address-book picker filtered to contacts matching `self.chain`.
+    /// Sets `self.flash` and returns without opening if no matching contacts exist.
+    fn open_book_picker(&mut self) {
+        let contacts: Vec<Contact> = self
+            .book
+            .entries
+            .iter()
+            .filter(|c| c.chain == self.chain)
+            .cloned()
+            .collect();
+        if contacts.is_empty() {
+            self.flash = Some(format!("no contacts for {}", self.chain.display_name()));
+            return;
+        }
+        self.flash = None;
+        let source = ContactPickerSource { contacts };
+        self.book_picker = Some(hjkl_picker::Picker::new(Box::new(source)));
+    }
+
+    /// Route a key event into the open book picker. Returns `true` if the picker
+    /// handled the key and the caller should skip normal form handling.
+    fn handle_book_picker_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        let Some(picker) = &mut self.book_picker else {
+            return false;
+        };
+        match picker.handle_key(key) {
+            PickerEvent::Cancel => {
+                self.book_picker = None;
+            }
+            PickerEvent::Select(PickerAction::OpenPath(addr_path)) => {
+                let addr = addr_path.to_string_lossy().into_owned();
+                if let Some(Field::SingleLineText(f)) = self.form.fields.get_mut(FIELD_RECIPIENT) {
+                    f.set_text(&addr);
+                }
+                self.book_picker = None;
+            }
+            PickerEvent::Select(_) | PickerEvent::None => {
+                if let Some(p) = &mut self.book_picker {
+                    p.refresh();
+                }
+            }
+        }
+        true
     }
 
     fn field_text(&self, idx: usize) -> String {
@@ -350,6 +425,7 @@ impl SendState {
                         ("i".into(), "Enter Insert mode to edit field".into()),
                         ("Tab / j / k".into(), "Move focus between fields".into()),
                         ("h / l".into(), "Cycle select/checkbox options".into()),
+                        ("Ctrl+B".into(), "Pick from address book".into()),
                         ("Enter".into(), "Submit (on Sign & broadcast field)".into()),
                         ("Esc".into(), "Back to accounts".into()),
                         ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
@@ -840,6 +916,23 @@ where
                     }
                 }
 
+                // Picker open: route all keys through picker, skip form.
+                if state.book_picker.is_some() {
+                    state.handle_book_picker_key(k);
+                    continue;
+                }
+
+                // Ctrl+B in Normal mode on the recipient field opens the picker.
+                if k.modifiers.contains(KeyModifiers::CONTROL)
+                    && k.code == KeyCode::Char('b')
+                    && state.form.mode == FormMode::Normal
+                    && state.form.focused() == FIELD_RECIPIENT
+                    && matches!(state.phase, Phase::Form)
+                {
+                    state.open_book_picker();
+                    continue;
+                }
+
                 state.form.handle_input(Input::from(k));
             }
             Event::Resize(_, _) => continue,
@@ -883,17 +976,79 @@ fn draw_form_phase(f: &mut ratatui::Frame, area: Rect, state: &mut SendState) {
         f.set_cursor_position((cx, cy));
     }
 
-    let mode_hint = if state.form.mode == FormMode::Insert {
-        "Esc Normal • Tab/j/k focus • h/l select tier"
+    let hint_content: Line = if let Some(msg) = &state.flash {
+        Line::from(Span::styled(
+            msg.clone(),
+            Style::default().fg(Color::Yellow),
+        ))
     } else {
-        "i edit • Tab/j/k focus • h/l tier • Enter submit • Esc back"
+        let mode_hint = if state.form.mode == FormMode::Insert {
+            "Esc Normal • Tab/j/k focus • h/l select tier"
+        } else {
+            "i edit • Tab/j/k focus • h/l tier • Ctrl+B book • Enter submit • Esc back"
+        };
+        Line::from(Span::styled(
+            mode_hint,
+            Style::default().fg(Color::DarkGray),
+        ))
     };
-    let p = Paragraph::new(Line::from(Span::styled(
-        mode_hint,
-        Style::default().fg(Color::DarkGray),
-    )))
-    .alignment(Alignment::Center);
+    let p = Paragraph::new(hint_content).alignment(Alignment::Center);
     f.render_widget(p, chunks[1]);
+
+    if state.book_picker.is_some() {
+        draw_book_picker_overlay(f, area, state);
+    }
+}
+
+fn draw_book_picker_overlay(f: &mut ratatui::Frame, area: Rect, state: &mut SendState) {
+    let Some(picker) = &mut state.book_picker else {
+        return;
+    };
+    picker.refresh();
+
+    let w = area.width.min(60);
+    let h = area.height.min(14);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let overlay = Rect::new(x, y, w, h);
+
+    let block = Block::default()
+        .title(format!(" {} ", picker.title()))
+        .borders(Borders::ALL)
+        .style(Style::default().bg(Color::Black));
+    let inner = block.inner(overlay);
+    f.render_widget(Clear, overlay);
+    f.render_widget(block, overlay);
+
+    let entries = picker.visible_entries();
+    let selected = picker.selected;
+
+    let rows: Vec<Line> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, (label, _))| {
+            if i == selected {
+                Line::from(Span::styled(
+                    format!("> {label}"),
+                    Style::default().bg(Color::DarkGray),
+                ))
+            } else {
+                Line::from(Span::raw(format!("  {label}")))
+            }
+        })
+        .collect();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .split(inner);
+
+    let query = picker.query.text();
+    let query_para = Paragraph::new(query)
+        .block(Block::default().borders(Borders::BOTTOM))
+        .style(Style::default().fg(Color::White));
+    f.render_widget(query_para, chunks[0]);
+    f.render_widget(Paragraph::new(rows), chunks[1]);
 }
 
 /// Render the form in the background with a spinner overlay at the bottom.
@@ -1025,6 +1180,64 @@ fn chain_amount_atoms(chain: ChainId, value: f64) -> u128 {
     (value * scale).round() as u128
 }
 
+// ── Contact picker source ──────────────────────────────────────────────────
+
+fn short_address(addr: &str) -> String {
+    if addr.len() <= 16 {
+        return addr.to_string();
+    }
+    format!("{}…{}", &addr[..6], &addr[addr.len() - 4..])
+}
+
+struct ContactPickerSource {
+    contacts: Vec<Contact>,
+}
+
+impl PickerLogic for ContactPickerSource {
+    fn title(&self) -> &str {
+        "address book"
+    }
+
+    fn item_count(&self) -> usize {
+        self.contacts.len()
+    }
+
+    fn label(&self, idx: usize) -> String {
+        self.contacts
+            .get(idx)
+            .map(|c| format!("{} — {}", c.label, short_address(&c.address)))
+            .unwrap_or_default()
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        self.contacts
+            .get(idx)
+            .map(|c| format!("{} {}", c.label, c.address))
+            .unwrap_or_default()
+    }
+
+    fn has_preview(&self) -> bool {
+        false
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        let addr = self
+            .contacts
+            .get(idx)
+            .map(|c| c.address.clone())
+            .unwrap_or_default();
+        PickerAction::OpenPath(PathBuf::from(addr))
+    }
+
+    fn enumerate(
+        &mut self,
+        _query: Option<&str>,
+        _cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        None
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1117,5 +1330,72 @@ mod tests {
     fn validate_custom_fee_accepts_positive() {
         assert!(validate_custom_fee("10").is_ok());
         assert!(validate_custom_fee("1").is_ok());
+    }
+
+    fn make_book() -> AddressBook {
+        AddressBook {
+            entries: vec![
+                Contact {
+                    label: "Alice BTC".into(),
+                    address: "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu".into(),
+                    chain: ChainId::Bitcoin,
+                    note: None,
+                },
+                Contact {
+                    label: "Bob ETH".into(),
+                    address: "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed".into(),
+                    chain: ChainId::Ethereum,
+                    note: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn book_picker_filters_to_matching_chain() {
+        let book = make_book();
+        let mut state = SendState::new_with_book(ChainId::Bitcoin, 1_000_000, book);
+        state.open_book_picker();
+        assert!(
+            state.book_picker.is_some(),
+            "picker should open for Bitcoin send with a BTC contact"
+        );
+        assert!(
+            state.flash.is_none(),
+            "no flash when contacts exist for the chain"
+        );
+        let picker = state.book_picker.as_mut().unwrap();
+        assert_eq!(picker.visible_entries().len(), 1, "only the BTC contact");
+        let (label, _) = &picker.visible_entries()[0];
+        assert!(label.contains("Alice BTC"), "label contains contact name");
+    }
+
+    #[test]
+    fn book_picker_shows_flash_when_no_matching_contacts() {
+        let book = make_book();
+        let mut state = SendState::new_with_book(ChainId::Litecoin, 500_000, book);
+        state.open_book_picker();
+        assert!(
+            state.book_picker.is_none(),
+            "picker must not open when no contacts match"
+        );
+        assert!(
+            state.flash.is_some(),
+            "flash message must be set when no contacts match"
+        );
+        let flash = state.flash.as_ref().unwrap();
+        assert!(flash.contains("Litecoin"), "flash names the chain");
+    }
+
+    #[test]
+    fn set_recipient_from_picker_writes_to_field() {
+        let btc_addr = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
+        let book = make_book();
+        let mut state = SendState::new_with_book(ChainId::Bitcoin, 1_000_000, book);
+        if let Some(Field::SingleLineText(f)) = state.form.fields.get_mut(FIELD_RECIPIENT) {
+            f.set_text(btc_addr);
+        }
+        let actual = state.field_text(FIELD_RECIPIENT);
+        assert_eq!(actual, btc_addr);
     }
 }
