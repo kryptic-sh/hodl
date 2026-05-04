@@ -17,6 +17,7 @@ use hodl_wallet::{UnlockedWallet, Wallet};
 
 use crate::account::{self, AccountAction, AccountState};
 use crate::address_book::{self, AddressBookAction, AddressBookState};
+use crate::addresses::{self, AddressesAction, AddressesState};
 use crate::clipboard::ClipboardHandle;
 use crate::help::{HelpAction, HelpOverlay};
 use crate::lock::{self, Outcome as LockOutcome};
@@ -35,6 +36,7 @@ enum Screen {
     Onboarding(Box<OnboardingState>),
     Accounts(Box<AccountState>),
     AddressBook(Box<AddressBookState>),
+    Addresses(Box<AddressesState>),
     Receive(ReceiveState),
     Send(Box<SendState>),
     Settings,
@@ -52,6 +54,10 @@ pub struct App {
     clipboard: ClipboardHandle,
     /// Contextual help overlay; drawn on top of the active screen when `Some`.
     help_overlay: Option<HelpOverlay>,
+    /// Stashed AccountState while the Addresses sub-view is open.
+    /// Preserves the cached WalletScan so re-entering Accounts does not
+    /// trigger a fresh network round-trip.
+    accounts_stash: Option<Box<AccountState>>,
 }
 
 impl App {
@@ -70,6 +76,7 @@ impl App {
             last_activity: Instant::now(),
             clipboard,
             help_overlay: None,
+            accounts_stash: None,
         })
     }
 
@@ -88,6 +95,7 @@ impl App {
             last_activity: Instant::now(),
             clipboard,
             help_overlay: None,
+            accounts_stash: None,
         })
     }
 
@@ -107,6 +115,7 @@ impl App {
             last_activity: Instant::now(),
             clipboard,
             help_overlay: None,
+            accounts_stash: None,
         })
     }
 
@@ -129,6 +138,7 @@ impl App {
             last_activity: Instant::now(),
             clipboard,
             help_overlay: None,
+            accounts_stash: None,
         })
     }
 
@@ -311,7 +321,45 @@ impl App {
                             }
                         }
                         Some(AccountAction::OpenAddresses) => {
-                            // Step C: open Addresses sub-view
+                            // Take the AccountState out of the screen so we can
+                            // stash it. The screen temporarily holds a sentinel
+                            // Lock value while we build the Addresses state.
+                            let old_screen = std::mem::replace(&mut self.screen, Screen::Lock);
+                            if let Screen::Accounts(acc_state) = old_screen {
+                                let chain = acc_state.current_chain;
+                                let scan = acc_state.scan.clone();
+                                // Stash the AccountState before transitioning.
+                                self.accounts_stash = Some(acc_state);
+
+                                match scan {
+                                    None => {
+                                        // `d` is gated on scan being present in
+                                        // account.rs, so this branch is defensive.
+                                        tracing::debug!(
+                                            "OpenAddresses fired with no scan — ignoring"
+                                        );
+                                        // Restore the stash immediately.
+                                        if let Some(stashed) = self.accounts_stash.take() {
+                                            self.screen = Screen::Accounts(stashed);
+                                        }
+                                    }
+                                    Some(scan) => {
+                                        let config = self.config.clone();
+                                        let path_fn = move |change: u32, index: u32| {
+                                            match crate::active_chain::ActiveChain::from_chain_id(
+                                                chain, &config,
+                                            ) {
+                                                Ok(active) => {
+                                                    active.path_with_change(0, change, index)
+                                                }
+                                                Err(_) => "?".to_string(),
+                                            }
+                                        };
+                                        let addr_state = AddressesState::new(&scan, chain, path_fn);
+                                        self.screen = Screen::Addresses(Box::new(addr_state));
+                                    }
+                                }
+                            }
                         }
                         Some(AccountAction::OpenSend {
                             chain,
@@ -430,6 +478,110 @@ impl App {
                                 let area = f.area();
                                 if let Screen::AddressBook(s) = &mut self.screen {
                                     address_book::draw(f, area, s);
+                                }
+                            })?;
+                        }
+                    }
+                }
+                Screen::Addresses(_) => {
+                    if !event::poll(Duration::from_millis(250))? {
+                        terminal.draw(|f| {
+                            let area = f.area();
+                            if let Screen::Addresses(s) = &mut self.screen {
+                                addresses::draw(f, area, s);
+                            }
+                            if let Some(ref mut overlay) = self.help_overlay {
+                                overlay.draw(f, area);
+                            }
+                        })?;
+                        continue;
+                    }
+
+                    let ev = event::read()?;
+                    if matches!(&ev, Event::Key(k) if k.kind == KeyEventKind::Press)
+                        || matches!(&ev, Event::Mouse(_))
+                    {
+                        self.last_activity = Instant::now();
+                    }
+
+                    // Overlay absorbs all keys when open.
+                    if let Some(ref mut overlay) = self.help_overlay {
+                        if let Event::Key(k) = ev
+                            && k.kind == KeyEventKind::Press
+                            && overlay.handle_key(k) == HelpAction::Close
+                        {
+                            self.help_overlay = None;
+                        }
+                        terminal.draw(|f| {
+                            let area = f.area();
+                            if let Screen::Addresses(s) = &mut self.screen {
+                                addresses::draw(f, area, s);
+                            }
+                            if let Some(ref mut overlay) = self.help_overlay {
+                                overlay.draw(f, area);
+                            }
+                        })?;
+                        continue;
+                    }
+
+                    // Mouse scroll: one row per event.
+                    if let (Event::Mouse(m), Screen::Addresses(s)) = (&ev, &mut self.screen) {
+                        match m.kind {
+                            MouseEventKind::ScrollUp => {
+                                s.move_selection(-1);
+                                self.last_activity = Instant::now();
+                            }
+                            MouseEventKind::ScrollDown => {
+                                s.move_selection(1);
+                                self.last_activity = Instant::now();
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    let action = match &mut self.screen {
+                        Screen::Addresses(s) => {
+                            if let Event::Key(k) = ev {
+                                if k.kind == KeyEventKind::Press {
+                                    s.handle_key(k)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+
+                    match action {
+                        Some(AddressesAction::Close) => {
+                            // Restore the stashed AccountState so the cached
+                            // WalletScan is preserved and no re-scan is needed.
+                            if let Some(stashed) = self.accounts_stash.take() {
+                                self.screen = Screen::Accounts(stashed);
+                            } else {
+                                // Fallback: rebuild and re-scan if the stash was
+                                // somehow lost.
+                                let mut acc_state = self.make_accounts();
+                                if let Some(unlocked) = &self.unlocked {
+                                    acc_state.start_load(unlocked);
+                                }
+                                self.screen = Screen::Accounts(Box::new(acc_state));
+                            }
+                        }
+                        Some(AddressesAction::Quit) => return Ok(()),
+                        Some(AddressesAction::ShowHelp) => {
+                            if let Screen::Addresses(s) = &self.screen {
+                                self.help_overlay =
+                                    Some(HelpOverlay::new("Addresses", s.help_lines()));
+                            }
+                        }
+                        None => {
+                            terminal.draw(|f| {
+                                let area = f.area();
+                                if let Screen::Addresses(s) = &mut self.screen {
+                                    addresses::draw(f, area, s);
                                 }
                             })?;
                         }

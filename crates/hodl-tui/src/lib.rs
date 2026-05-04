@@ -7,6 +7,7 @@
 pub mod account;
 pub mod active_chain;
 pub mod address_book;
+pub mod addresses;
 pub mod app;
 pub mod clipboard;
 pub mod help;

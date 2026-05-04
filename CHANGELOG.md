@@ -10,6 +10,19 @@ and this project adheres to
 
 ### Added
 
+- **Addresses sub-view (`d` from Accounts screen).** Pressing `d` on the
+  Accounts screen (once a scan is complete and at least one used address exists)
+  opens a new read-only `Addresses` screen backed by the cached `WalletScan` —
+  no network round-trip. The table shows every used address with its derivation
+  path, type (`recv` / `chg`), confirmed balance, and pending balance. `j`/`k`
+  navigate the list; `g`/`G` jump to first/last; `q`/`Esc` returns to the
+  Accounts screen restoring the cached scan; `?` opens the help overlay. Mouse
+  scroll moves the selection one row per event. The `AccountState` is stashed on
+  `App` while the Addresses screen is open and restored on close so no re-scan
+  is triggered. `ActiveChain::path_with_change(account, change, index)` added to
+  produce change-aware BIP-44 path strings; the existing `derivation_path` now
+  delegates to it with `change=0`.
+
 - **`hodl-chain-bitcoin`: wallet-scan data layer with BIP-44 gap-limit walker.**
   New public API in `hodl-chain-bitcoin`:
   - `BalanceSplit` — confirmed/pending balance pair in sats with `total()` and
