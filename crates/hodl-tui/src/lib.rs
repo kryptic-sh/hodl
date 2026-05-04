@@ -18,7 +18,6 @@ pub mod retry;
 pub mod scan_cache;
 pub mod send;
 pub mod settings;
-pub mod spinner;
 
 use std::path::PathBuf;
 use std::time::Duration;

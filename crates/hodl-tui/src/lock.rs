@@ -16,8 +16,8 @@
 //! params) is run **off the UI thread** via `std::thread::spawn`. A
 //! `std::sync::mpsc::channel` carries the result back. While a decrypt attempt
 //! is in flight, `pending_unlock` holds the `Receiver` end. The event loop
-//! polls it each tick with `try_recv` and renders an animated braille spinner
-//! so the user knows the app is working.
+//! polls it each tick with `try_recv` and renders an animated spinner (wall-clock
+//! frame via `hjkl_ratatui::spinner::frame()`) so the user knows the app is working.
 //!
 //! Key presses are ignored while `pending_unlock` is `Some` — argon2id is
 //! uninterruptible, so cancellation is not meaningful; ignoring keys prevents
@@ -45,7 +45,6 @@ use zeroize::Zeroize;
 use hodl_wallet::{UnlockedWallet, Wallet, storage::list_wallets};
 
 use crate::help::{HelpAction, HelpOverlay};
-use crate::spinner::Spinner;
 
 /// Outcome reported back to the caller.
 #[derive(Debug)]
@@ -83,8 +82,7 @@ where
                     state.message = Some((format!("{e}"), MessageKind::Error));
                 }
                 Err(mpsc::TryRecvError::Empty) => {
-                    // Still computing — advance spinner and redraw below.
-                    state.spinner.tick();
+                    // Still computing — redraw below.
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     state.pending_unlock = None;
@@ -178,8 +176,6 @@ pub(crate) struct LockState {
     /// All key input is ignored while this is `Some` because the KDF is
     /// uninterruptible — accepting more input would only queue a race.
     pending_unlock: Option<Receiver<Result<UnlockedWallet>>>,
-    /// Animated spinner shown while decrypting.
-    spinner: Spinner,
 }
 
 fn make_password_form() -> Form {
@@ -197,7 +193,6 @@ impl LockState {
             last_activity: Instant::now(),
             picker: None,
             pending_unlock: None,
-            spinner: Spinner::new(),
         }
     }
 
@@ -238,7 +233,6 @@ impl LockState {
         });
 
         self.pending_unlock = Some(rx);
-        self.spinner = Spinner::new();
         self.message = None;
     }
 
@@ -442,7 +436,10 @@ fn draw_locked(f: &mut ratatui::Frame, area: Rect, state: &mut LockState) {
 
     // Show spinner while decrypting, otherwise show any status message.
     if state.pending_unlock.is_some() {
-        state.spinner.draw(f, chunks[2], "decrypting…", Color::Cyan);
+        let text = format!("decrypting…  {}", hjkl_ratatui::spinner::frame());
+        let line = Line::from(Span::styled(text, Style::default().fg(Color::Cyan)));
+        let p = Paragraph::new(line).alignment(Alignment::Center);
+        f.render_widget(p, chunks[2]);
     } else if let Some((msg, kind)) = &state.message {
         let style = match kind {
             MessageKind::Info => Style::default().fg(Color::Cyan),

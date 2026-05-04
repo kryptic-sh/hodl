@@ -50,7 +50,6 @@ use hodl_wallet::UnlockedWallet;
 use crate::active_chain::{ActiveChain, PreparedSend, SendOpts};
 use crate::help::{HelpAction, HelpOverlay};
 use crate::retry::{self, MAX_ATTEMPTS as MAX_SEND_ATTEMPTS};
-use crate::spinner::Spinner;
 
 // ── Field indices ──────────────────────────────────────────────────────────
 
@@ -203,16 +202,12 @@ enum SendAttempt<T> {
 
 enum Phase {
     Form,
-    /// Off-thread: estimate_fee + build_send. Carries the channel, spinner,
-    /// and an atomic attempt counter updated by the worker on each retry.
-    Building(
-        Receiver<Result<BroadcastPayload, String>>,
-        Spinner,
-        Arc<AtomicU32>,
-    ),
-    /// Off-thread: sign_and_broadcast. Carries the channel, spinner, and
-    /// an atomic attempt counter updated by the worker on each retry.
-    Broadcasting(Receiver<Result<String, String>>, Spinner, Arc<AtomicU32>),
+    /// Off-thread: estimate_fee + build_send. Carries the channel and an
+    /// atomic attempt counter updated by the worker on each retry.
+    Building(Receiver<Result<BroadcastPayload, String>>, Arc<AtomicU32>),
+    /// Off-thread: sign_and_broadcast. Carries the channel and an atomic
+    /// attempt counter updated by the worker on each retry.
+    Broadcasting(Receiver<Result<String, String>>, Arc<AtomicU32>),
     /// Broadcast succeeded; hold TxId string.
     Result(String),
     /// Submit failed; error message.
@@ -285,7 +280,7 @@ impl SendState {
     pub fn is_busy(&self) -> bool {
         matches!(
             self.phase,
-            Phase::Building(_, _, _) | Phase::Broadcasting(_, _, _)
+            Phase::Building(_, _) | Phase::Broadcasting(_, _)
         )
     }
 
@@ -293,7 +288,7 @@ impl SendState {
     pub fn poll(&mut self) -> bool {
         use std::sync::mpsc::TryRecvError;
         match &mut self.phase {
-            Phase::Building(rx, spinner, _attempt) => {
+            Phase::Building(rx, _attempt) => {
                 match rx.try_recv() {
                     Ok(Ok(payload)) => {
                         // Build succeeded — kick off broadcast thread.
@@ -304,7 +299,7 @@ impl SendState {
                             let result = broadcast_thread(payload, bcast_attempt_worker);
                             let _ = tx.send(result);
                         });
-                        self.phase = Phase::Broadcasting(brx, Spinner::new(), bcast_attempt);
+                        self.phase = Phase::Broadcasting(brx, bcast_attempt);
                         true
                     }
                     Ok(Err(msg)) => {
@@ -315,13 +310,10 @@ impl SendState {
                         self.phase = Phase::Error("build thread panicked — try again".into());
                         true
                     }
-                    Err(TryRecvError::Empty) => {
-                        spinner.tick();
-                        false
-                    }
+                    Err(TryRecvError::Empty) => false,
                 }
             }
-            Phase::Broadcasting(rx, spinner, _attempt) => match rx.try_recv() {
+            Phase::Broadcasting(rx, _attempt) => match rx.try_recv() {
                 Ok(Ok(txid)) => {
                     self.phase = Phase::Result(txid);
                     true
@@ -334,10 +326,7 @@ impl SendState {
                     self.phase = Phase::Error("broadcast thread panicked — try again".into());
                     true
                 }
-                Err(TryRecvError::Empty) => {
-                    spinner.tick();
-                    false
-                }
+                Err(TryRecvError::Empty) => false,
             },
             _ => false,
         }
@@ -368,7 +357,7 @@ impl SendState {
                     ]
                 }
             }
-            Phase::Building(_, _, _) | Phase::Broadcasting(_, _, _) => vec![
+            Phase::Building(_, _) | Phase::Broadcasting(_, _) => vec![
                 ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
                 ("F1".into(), "Show this help".into()),
             ],
@@ -470,7 +459,7 @@ impl SendState {
             let _ = tx.send(result);
         });
 
-        self.phase = Phase::Building(rx, Spinner::new(), build_attempt);
+        self.phase = Phase::Building(rx, build_attempt);
     }
 }
 
@@ -866,7 +855,7 @@ pub fn draw(f: &mut ratatui::Frame, state: &mut SendState) {
     match &state.phase {
         Phase::Result(txid) => draw_result(f, area, txid.clone()),
         Phase::Error(msg) => draw_error(f, area, msg.clone(), state),
-        Phase::Building(_, _, _) | Phase::Broadcasting(_, _, _) => draw_busy(f, area, state),
+        Phase::Building(_, _) | Phase::Broadcasting(_, _) => draw_busy(f, area, state),
         Phase::Form => draw_form_phase(f, area, state),
     }
 }
@@ -909,9 +898,9 @@ fn draw_form_phase(f: &mut ratatui::Frame, area: Rect, state: &mut SendState) {
 
 /// Render the form in the background with a spinner overlay at the bottom.
 fn draw_busy(f: &mut ratatui::Frame, area: Rect, state: &mut SendState) {
-    let (base_label, spinner, attempt) = match &state.phase {
-        Phase::Building(_, s, a) => ("building…", s, a.load(Ordering::Relaxed)),
-        Phase::Broadcasting(_, s, a) => ("broadcasting…", s, a.load(Ordering::Relaxed)),
+    let (base_label, attempt) = match &state.phase {
+        Phase::Building(_, a) => ("building…", a.load(Ordering::Relaxed)),
+        Phase::Broadcasting(_, a) => ("broadcasting…", a.load(Ordering::Relaxed)),
         _ => return,
     };
     let attempt_suffix = if attempt > 1 {
@@ -942,7 +931,10 @@ fn draw_busy(f: &mut ratatui::Frame, area: Rect, state: &mut SendState) {
     // what they submitted.
     draw_form(f, chunks[0], &mut state.form, &FormPalette::dark());
 
-    spinner.draw(f, chunks[1], label, Color::Cyan);
+    let spinner_text = format!("{label}  {}", hjkl_ratatui::spinner::frame());
+    let spinner_line = Line::from(Span::styled(spinner_text, Style::default().fg(Color::Cyan)));
+    let p = Paragraph::new(spinner_line).alignment(Alignment::Center);
+    f.render_widget(p, chunks[1]);
 }
 
 fn draw_result(f: &mut ratatui::Frame, area: Rect, txid: String) {

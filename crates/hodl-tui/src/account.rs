@@ -13,7 +13,7 @@
 //! - `ScanEvent::Used(used)` → append to `partial_scan`; redraw immediately.
 //! - `ScanEvent::Done(scan)` → swap `partial_scan` into `scan`; clear pending.
 //! - `ScanEvent::Error(msg)` → set scan_error; clear pending.
-//! - `TryRecvError::Empty`   → tick `scanning_spinner`; no redraw.
+//! - `TryRecvError::Empty`   → no state change; wall-clock spinner via `hjkl_ratatui::spinner::frame()` on next draw.
 //! - `TryRecvError::Disconnected` → set scan_error to "scan thread panicked".
 //!
 //! Navigation keys are responsive even while a scan is in flight:
@@ -26,7 +26,7 @@
 //! (the cache prime keeps the summary card populated meanwhile).
 //!
 //! The summary card shows partial results (live count + running balance) while
-//! scanning, with the spinner ticking next to the numbers. The Addresses
+//! scanning, with a wall-clock spinner frame next to the numbers. The Addresses
 //! sub-view (`d`) opens as soon as the partial scan has any used address.
 
 use std::path::{Path, PathBuf};
@@ -51,7 +51,6 @@ use zeroize::Zeroize;
 use hodl_wallet::UnlockedWallet;
 
 use crate::active_chain::ActiveChain;
-use crate::spinner::Spinner;
 
 /// Events sent from the scan worker thread to the UI.
 enum ScanEvent {
@@ -124,8 +123,6 @@ pub struct AccountState {
     /// Surfaced in the status line so the user can see the wallet is
     /// failing over to a different Electrum server.
     scan_attempt: u32,
-    /// Spinner shown while `pending_scan` is active.
-    scanning_spinner: Option<Spinner>,
     /// Chain picker overlay. `None` when closed.
     picker: Option<hjkl_picker::Picker>,
     /// Ordered chain list parallel to the open picker; used to resolve
@@ -150,7 +147,6 @@ impl AccountState {
             pending_scan: None,
             partial_scan: WalletScan::default(),
             scan_attempt: 0,
-            scanning_spinner: None,
             picker: None,
             picker_chains: Vec::new(),
             flash: None,
@@ -173,13 +169,6 @@ impl AccountState {
     /// check `scan.used.is_empty()` to detect that case.
     pub fn live_scan(&self) -> &WalletScan {
         self.scan.as_ref().unwrap_or(&self.partial_scan)
-    }
-
-    /// Tick the scanning spinner (called by the event loop on `TryRecvError::Empty`).
-    pub fn tick_spinner(&mut self) {
-        if let Some(ref mut s) = self.scanning_spinner {
-            s.tick();
-        }
     }
 
     /// Poll the pending scan channel, draining all queued events in one pass.
@@ -208,7 +197,6 @@ impl AccountState {
                     self.scan_error = None;
                     self.partial_scan = WalletScan::default();
                     self.pending_scan = None;
-                    self.scanning_spinner = None;
                     return true;
                 }
                 Ok(ScanEvent::Error(msg)) => {
@@ -216,7 +204,6 @@ impl AccountState {
                     self.scan = None;
                     self.partial_scan = WalletScan::default();
                     self.pending_scan = None;
-                    self.scanning_spinner = None;
                     return true;
                 }
                 Ok(ScanEvent::Reset { attempt }) => {
@@ -228,9 +215,6 @@ impl AccountState {
                     changed = true;
                 }
                 Err(TryRecvError::Empty) => {
-                    if !changed {
-                        self.tick_spinner();
-                    }
                     return changed;
                 }
                 Err(TryRecvError::Disconnected) => {
@@ -238,7 +222,6 @@ impl AccountState {
                     self.scan = None;
                     self.partial_scan = WalletScan::default();
                     self.pending_scan = None;
-                    self.scanning_spinner = None;
                     return true;
                 }
             }
@@ -298,7 +281,6 @@ impl AccountState {
         });
 
         self.pending_scan = Some(rx);
-        self.scanning_spinner = Some(Spinner::new());
     }
 
     /// Open the chain switcher picker.
@@ -694,12 +676,6 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
             None
         }
     });
-    let spinner_frame = state
-        .scanning_spinner
-        .as_ref()
-        .map(|s| s.current())
-        .unwrap_or("⠋");
-
     // Build card body lines.
     let body_lines: Vec<Line> = if let Some(ref err) = state.scan_error.clone() {
         // Scan failed — render error in the card body.
@@ -719,7 +695,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
         // Spinner suffix only while a scan is in flight.
         let suffix: Span = if state.is_scanning() {
             Span::styled(
-                format!("  {spinner_frame}"),
+                format!("  {}", hjkl_ratatui::spinner::frame()),
                 Style::default().fg(Color::Cyan),
             )
         } else {
@@ -772,11 +748,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
 
     // Status line.
     let (status_text, status_color) = if state.is_scanning() {
-        let frame = state
-            .scanning_spinner
-            .as_ref()
-            .map(|s| s.current())
-            .unwrap_or("⠋");
+        let frame = hjkl_ratatui::spinner::frame();
         let attempt_suffix = if state.scan_attempt > 1 {
             format!(" (attempt {}/{MAX_SCAN_ATTEMPTS})", state.scan_attempt)
         } else {
