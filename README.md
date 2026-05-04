@@ -38,6 +38,33 @@ hodl/
 └── Cargo.toml                 # workspace root
 ```
 
+## Install
+
+**Arch Linux (AUR)**
+
+```bash
+paru -S hodl-bin
+```
+
+**Alpine Linux** (once available in the apk repo)
+
+```bash
+apk add hodl
+```
+
+Until the package lands in a public Alpine repo, install the `.apk` asset from
+the [GitHub Release](https://github.com/kryptic-sh/hodl/releases) directly:
+
+```bash
+apk add --allow-untrusted hodl-*.apk
+```
+
+**Pre-built binaries**
+
+Download the tarball for your platform from the
+[Releases](https://github.com/kryptic-sh/hodl/releases) page and extract the
+`hodl` binary onto your `$PATH`.
+
 ## Build
 
 ```bash

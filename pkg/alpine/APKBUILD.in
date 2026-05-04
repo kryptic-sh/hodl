@@ -1,0 +1,26 @@
+# Maintainer: mxaddict <mxaddict@kryptic.sh>
+#
+# Auto-generated. Source: https://github.com/kryptic-sh/hodl
+# Edits made directly to a built .apk are not tracked. To change this
+# APKBUILD, edit `pkg/alpine/APKBUILD.in` in the upstream repo and let
+# `.github/workflows/release.yml` rebuild on the next tag.
+pkgname=hodl
+pkgver={VERSION}
+pkgrel=0
+pkgdesc="Light crypto wallet for the terminal — multi-chain TUI built on ratatui"
+url="https://hodl.kryptic.sh/"
+arch="x86_64"
+license="MIT"
+# !check  — no test suite shipped in the binary tarball.
+# !strip  — binary is already stripped by the upstream release build,
+#           and abuild's strip step rejects cross-built artifacts.
+options="!check !strip"
+source="hodl-v$pkgver-x86_64-unknown-linux-musl.tar.gz::https://github.com/kryptic-sh/hodl/releases/download/v$pkgver/hodl-v$pkgver-x86_64-unknown-linux-musl.tar.gz"
+
+package() {
+    install -Dm755 "$srcdir/hodl" "$pkgdir/usr/bin/hodl"
+    install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "$srcdir/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
+
+sha512sums="{SHA512_X86_64}  hodl-v$pkgver-x86_64-unknown-linux-musl.tar.gz"

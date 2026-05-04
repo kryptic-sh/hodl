@@ -8,6 +8,12 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Alpine .apk packaging pipeline (release CI builds .apk in `alpine:latest` and
+  uploads it as a release asset; install with
+  `apk add --allow-untrusted hodl-*.apk`).
+
 ## [0.3.1] - 2026-05-05
 
 ### Fixed
