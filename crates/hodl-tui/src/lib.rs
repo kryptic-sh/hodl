@@ -5,6 +5,7 @@
 //! `hjkl-form` + `hjkl-picker` + `hjkl-clipboard`.
 
 pub mod account;
+pub mod active_chain;
 pub mod address_book;
 pub mod app;
 pub mod clipboard;

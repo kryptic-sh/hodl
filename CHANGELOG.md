@@ -19,11 +19,29 @@ and this project adheres to
 - **RBF (BIP-125)**: opt-in checkbox on the send screen. When enabled, every
   input's sequence is `0xfffffffd` (RBF-signaling); otherwise `0xffffffff`
   (final). Default is off — explicit user choice.
+- **Chain-aware TUI dispatch**: new `hodl_tui::active_chain::ActiveChain` enum
+  (Bitcoin / Ethereum / Monero) wraps the per-chain crates with a uniform
+  `derive` / `balance` / `build_send` / `sign_and_broadcast` surface. Factory
+  `from_chain_id(id, config)` picks the right `NetworkParams` + endpoint type
+  based on the user's config and Tor toggle. Account screen now re-derives rows
+  when the chain picker flips selection — the picker is no longer decorative.
+- ETH send wired end-to-end through the TUI. Recipient validator switches to
+  EIP-55 for Ethereum / BSC.
+- LTC / DOGE / BCH / NAV send paths exist in the chain crate but the TUI
+  `build_send` currently returns "not yet implemented" for them pending a
+  non-segwit PSBT signer (BTC + BTC-testnet are wired live).
 
 ### Changed
 
 - Send TUI passes `(account, total_balance)` to the chain instead of a single
   `(address, index)` pair. Account screen rebinds Send accordingly.
+- `account::AccountAction::OpenSend` carries `chain: ChainId` so the Send screen
+  builds the right chain. `send.rs` no longer hardcodes `BITCOIN_MAINNET`. The
+  3× `BitcoinChain::new` reconnect dance in `try_submit` is gone — `ActiveChain`
+  owns the connection.
+- Recipient validation is per-chain (`validate_recipient(s, chain_id)`). Bitcoin
+  family: bech32 segwit v0. Ethereum / BSC: EIP-55 hex. Monero: gated "not
+  implemented".
 
 ## [0.3.0] - 2026-05-04
 

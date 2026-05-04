@@ -1,8 +1,7 @@
 //! Account screen — shows addresses + balances for the unlocked wallet.
 //!
-//! For M2 we support one chain (Bitcoin). A `hjkl_picker::Picker` overlay
-//! lists configured chains; if none are configured, an empty-state banner
-//! is shown instead.
+//! Chain selection drives `ActiveChain::from_chain_id` — the picker is no
+//! longer decorative; switching chains re-derives rows against the new backend.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,9 +10,8 @@ use std::thread::JoinHandle;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_picker::{PickerAction, PickerEvent, PickerLogic};
-use hodl_chain_bitcoin::{BitcoinChain, NetworkParams, Purpose};
-use hodl_config::{ChainConfig, Config, Endpoint};
-use hodl_core::{Address, Amount, Chain, ChainId};
+use hodl_config::Config;
+use hodl_core::{Address, Amount, ChainId};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -23,6 +21,8 @@ use tracing::debug;
 
 use hodl_wallet::UnlockedWallet;
 
+use crate::active_chain::ActiveChain;
+
 /// Action emitted by the account screen to the parent app loop.
 #[derive(Debug)]
 pub enum AccountAction {
@@ -30,12 +30,15 @@ pub enum AccountAction {
     OpenReceive(Address),
     /// Navigate to the send screen for the given HD account.
     ///
-    /// Multi-source send aggregates UTXOs across all funded addresses in the
-    /// gap scan; address-level granularity is no longer needed here.
+    /// `chain` carries the currently-selected chain so `SendState` builds
+    /// the right `ActiveChain` without re-reading account state.
     OpenSend {
+        chain: ChainId,
         account: u32,
         total_balance_sats: u64,
     },
+    /// User switched chains via the picker; parent should call `load_accounts`.
+    ChainSwitched,
     /// Navigate to the address book screen.
     OpenAddressBook,
     /// Navigate to the settings screen.
@@ -59,8 +62,13 @@ pub struct AccountState {
     table_state: TableState,
     /// Chain picker overlay. `None` when closed.
     picker: Option<hjkl_picker::Picker>,
+    /// Ordered chain list parallel to the open picker; used to resolve
+    /// `PickerAction::SwitchSlot(idx)` back to a `ChainId`.
+    picker_chains: Vec<ChainId>,
     flash: Option<String>,
     config: Config,
+    /// Currently-selected chain. Defaults to Bitcoin; updated by the picker.
+    pub current_chain: ChainId,
 }
 
 impl AccountState {
@@ -69,64 +77,38 @@ impl AccountState {
             rows: Vec::new(),
             table_state: TableState::default(),
             picker: None,
+            picker_chains: Vec::new(),
             flash: None,
             config,
+            current_chain: ChainId::Bitcoin,
         }
     }
 
-    /// Populate the account rows by scanning the first gap-limit addresses.
-    ///
-    /// If `Config.chains[Bitcoin]` has no endpoints configured, leaves rows
-    /// empty and sets a flash message.
+    /// Populate the account rows for `current_chain` by deriving and querying
+    /// the first 5 addresses. Switches chains when `current_chain` changes.
     pub fn load_accounts(&mut self, wallet: &UnlockedWallet) {
-        let chain_cfg = self
-            .config
-            .chains
-            .get(&ChainId::Bitcoin)
-            .cloned()
-            .unwrap_or_default();
+        debug!("load_accounts for chain {:?}", self.current_chain);
 
-        if chain_cfg.endpoints.is_empty() {
-            self.flash = Some("no Electrum endpoints configured — edit settings to add one".into());
-            return;
-        }
-
-        let Some(endpoint_url) = first_electrum_url(&chain_cfg) else {
-            self.flash = Some("no valid Electrum endpoint found in config".into());
-            return;
-        };
-
-        debug!("connecting to Electrum: {endpoint_url}");
-
-        let proxy = if self.config.tor.enabled {
-            Some(self.config.tor.socks5.clone())
-        } else {
-            None
-        };
-
-        let electrum = match electrum_connect(&endpoint_url, proxy.as_deref()) {
-            Ok(c) => c,
+        let active = match ActiveChain::from_chain_id(self.current_chain, &self.config) {
+            Ok(a) => a,
             Err(e) => {
-                self.flash = Some(format!("Electrum connect failed: {e}"));
+                self.flash = Some(format!("{}: {e}", self.current_chain.display_name()));
                 return;
             }
         };
-
-        let chain = BitcoinChain::new(NetworkParams::BITCOIN_MAINNET, electrum)
-            .with_purpose(Purpose::Bip84);
 
         let seed = wallet.seed().as_bytes().to_owned();
         let mut rows = Vec::new();
 
         for index in 0..5u32 {
-            let addr = match chain.derive(&seed, 0, index) {
+            let addr = match active.derive(&seed, 0, index) {
                 Ok(a) => a,
                 Err(e) => {
-                    debug!("derive account {index} failed: {e}");
+                    debug!("derive {index} failed: {e}");
                     continue;
                 }
             };
-            let balance = match chain.balance(&addr) {
+            let balance = match active.balance(&addr) {
                 Ok(b) => {
                     debug!("balance {index}: {b:?}");
                     Some(b)
@@ -136,7 +118,8 @@ impl AccountState {
                     None
                 }
             };
-            let path = format!("m/84'/0'/0'/0/{index}");
+            let slip44 = self.current_chain.slip44();
+            let path = format!("m/44'/{slip44}'/0'/0/{index}");
             rows.push(AccountRow {
                 index,
                 path,
@@ -149,6 +132,7 @@ impl AccountState {
             self.flash = Some("no addresses derived — check chain config".into());
         } else {
             self.rows = rows;
+            self.flash = None;
             self.table_state.select(Some(0));
         }
     }
@@ -169,11 +153,14 @@ impl AccountState {
 
     /// Open the chain switcher picker.
     fn open_picker(&mut self) {
-        let chains: Vec<ChainId> = self.config.chains.keys().cloned().collect();
+        let mut chains: Vec<ChainId> = self.config.chains.keys().cloned().collect();
         if chains.is_empty() {
             self.flash = Some("no chains configured — edit settings".into());
             return;
         }
+        // Stable sort so the list is deterministic across renders.
+        chains.sort_by_key(|c| c.display_name());
+        self.picker_chains = chains.clone();
         let source = ChainPickerSource::new(chains);
         self.picker = Some(hjkl_picker::Picker::new(Box::new(source)));
     }
@@ -197,9 +184,14 @@ impl AccountState {
                 PickerEvent::Select(PickerAction::None) | PickerEvent::None => {
                     picker.refresh();
                 }
+                PickerEvent::Select(PickerAction::SwitchSlot(idx)) => {
+                    self.picker = None;
+                    if let Some(&chain) = self.picker_chains.get(idx) {
+                        self.current_chain = chain;
+                        return Some(AccountAction::ChainSwitched);
+                    }
+                }
                 PickerEvent::Select(_) => {
-                    // For M2 the pick just closes the overlay; chain
-                    // switching is post-M2.
                     self.picker = None;
                 }
             }
@@ -224,6 +216,7 @@ impl AccountState {
                     .map(|b| b.atoms() as u64)
                     .sum();
                 return Some(AccountAction::OpenSend {
+                    chain: self.current_chain,
                     account: 0,
                     total_balance_sats,
                 });
@@ -415,8 +408,7 @@ impl PickerLogic for ChainPickerSource {
     }
 
     fn select(&self, idx: usize) -> PickerAction {
-        let _ = idx;
-        PickerAction::None
+        PickerAction::SwitchSlot(idx)
     }
 
     fn enumerate(
@@ -426,44 +418,4 @@ impl PickerLogic for ChainPickerSource {
     ) -> Option<JoinHandle<()>> {
         None
     }
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-/// Connect to an Electrum server from a URL like `ssl://host:60002` or `tcp://host:50001`.
-///
-/// If `proxy` is `Some("socks5://host:port")`, routes the connection through SOCKS5.
-fn electrum_connect(
-    url: &str,
-    proxy: Option<&str>,
-) -> hodl_core::Result<hodl_chain_bitcoin::electrum::ElectrumClient> {
-    use hodl_chain_bitcoin::electrum::ElectrumClient;
-    use hodl_core::error::Error;
-
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| Error::Network(format!("invalid Electrum URL (missing scheme): {url}")))?;
-    let (host, port_str) = rest
-        .rsplit_once(':')
-        .ok_or_else(|| Error::Network(format!("invalid Electrum URL (missing port): {url}")))?;
-    let port: u16 = port_str
-        .parse()
-        .map_err(|_| Error::Network(format!("invalid port in Electrum URL: {url}")))?;
-
-    match (scheme, proxy) {
-        ("ssl" | "tls", Some(p)) => ElectrumClient::connect_tls_via_socks5(host, port, p),
-        ("ssl" | "tls", None) => ElectrumClient::connect_tls(host, port),
-        (_, Some(p)) => ElectrumClient::connect_tcp_via_socks5(host, port, p),
-        (_, None) => ElectrumClient::connect_tcp(host, port),
-    }
-}
-
-fn first_electrum_url(cfg: &ChainConfig) -> Option<String> {
-    cfg.endpoints.iter().find_map(|ep| {
-        if let Endpoint::Electrum { url, .. } = ep {
-            Some(url.clone())
-        } else {
-            None
-        }
-    })
 }

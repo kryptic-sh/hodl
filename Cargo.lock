@@ -1240,6 +1240,8 @@ dependencies = [
  "hjkl-picker",
  "hjkl-ratatui",
  "hodl-chain-bitcoin",
+ "hodl-chain-ethereum",
+ "hodl-chain-monero",
  "hodl-config",
  "hodl-core",
  "hodl-wallet",

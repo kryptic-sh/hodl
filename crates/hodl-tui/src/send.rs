@@ -1,20 +1,22 @@
-//! Send screen — build + sign + broadcast a Bitcoin P2WPKH transaction.
+//! Send screen — build + sign + broadcast a transaction on the active chain.
 //!
 //! Driven by `hjkl-form`. Fields:
-//!   0 = recipient (bech32 P2WPKH TextFieldEditor + validator)
-//!   1 = amount in BTC (TextFieldEditor + validator)
+//!   0 = recipient (address TextFieldEditor + per-chain validator)
+//!   1 = amount (TextFieldEditor + validator)
 //!   2 = fee tier SelectField (Slow / Normal / Fast / Custom)
-//!   3 = custom sat/vB (TextFieldEditor, only meaningful when tier = Custom)
-//!   4 = RBF checkbox (BIP-125 opt-in replace-by-fee)
+//!   3 = custom sat/vB (TextFieldEditor; Bitcoin only, ignored for EVM)
+//!   4 = RBF checkbox (BIP-125; Bitcoin only, ignored for non-BTC)
 //!   5 = "Sign & broadcast" SubmitField
 //!
 //! Submit pipeline:
-//!   1. Map tier → block target → estimate_fee; Custom reads field 3.
-//!   2. BitcoinChain::build_tx_multi_source → UnsignedTx + selected UTXOs + hints.
-//!   3. BitcoinChain::sign_multi_source → SignedTx.
-//!   4. Chain::broadcast → TxId displayed in result pane.
+//!   1. Validate recipient address per active chain codec.
+//!   2. Build `ActiveChain` from `chain_id` + config.
+//!   3. `estimate_fee` via the chain (BTC → SatsPerVbyte, ETH → Gwei). The
+//!      form's fee tier always maps to `estimate_fee`; custom sat/vB is BTC-only.
+//!   4. `build_send` → `PreparedSend`.
+//!   5. `sign_and_broadcast` → `TxId` displayed in result pane.
 //!
-//! After broadcast: result pane shows TxId + mempool.space hint URL.
+//! After broadcast: result pane shows TxId.
 //! `q` / Esc returns to Accounts.
 
 use anyhow::Result;
@@ -24,9 +26,8 @@ use hjkl_form::{
     TextFieldEditor, Validator,
 };
 use hjkl_ratatui::form::{FormPalette, draw_form};
-use hodl_chain_bitcoin::{BitcoinChain, NetworkParams, Purpose};
-use hodl_config::{ChainConfig, Config, Endpoint};
-use hodl_core::{Address, Amount, Chain, ChainId, FeeRate};
+use hodl_config::Config;
+use hodl_core::{Address, Amount, ChainId, FeeRate};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -36,6 +37,8 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use tracing::debug;
 
 use hodl_wallet::UnlockedWallet;
+
+use crate::active_chain::{ActiveChain, SendOpts};
 
 // ── Field indices ──────────────────────────────────────────────────────────
 
@@ -61,15 +64,33 @@ pub enum SendAction {
 
 // ── Validators ─────────────────────────────────────────────────────────────
 
-/// Validate a bech32 P2WPKH address.
-pub fn validate_recipient(s: &str) -> std::result::Result<(), String> {
+/// Validate a recipient address for the given chain.
+///
+/// Bitcoin family uses bech32 segwit v0 P2WPKH. Note: DOGE/BCH/NAV don't
+/// actually use bech32 in practice, but the TUI gates those chains' send
+/// path earlier (build_send returns an error), so the validator is moot.
+/// Ethereum family uses EIP-55 hex. Monero send is not yet implemented.
+pub fn validate_recipient(s: &str, chain: ChainId) -> std::result::Result<(), String> {
     if s.is_empty() {
         return Err("recipient cannot be empty".into());
     }
-    match bech32::segwit::decode(s) {
-        Ok((_, ver, prog)) if ver == bech32::segwit::VERSION_0 && prog.len() == 20 => Ok(()),
-        Ok(_) => Err("address must be a P2WPKH bech32 (witness v0, 20-byte program)".into()),
-        Err(e) => Err(format!("invalid bech32 address: {e}")),
+    use ChainId::*;
+    match chain {
+        Bitcoin | BitcoinTestnet | Litecoin | Dogecoin | BitcoinCash | NavCoin => {
+            match bech32::segwit::decode(s) {
+                Ok((_, ver, prog)) if ver == bech32::segwit::VERSION_0 && prog.len() == 20 => {
+                    Ok(())
+                }
+                Ok(_) => {
+                    Err("address must be a P2WPKH bech32 (witness v0, 20-byte program)".into())
+                }
+                Err(e) => Err(format!("invalid bech32 address: {e}")),
+            }
+        }
+        Ethereum | BscMainnet => hodl_chain_ethereum::address::from_str_normalized(s)
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        Monero => Err("Monero send not implemented".into()),
     }
 }
 
@@ -112,6 +133,7 @@ enum Phase {
 }
 
 pub struct SendState {
+    chain: ChainId,
     account: u32,
     total_balance_sats: u64,
     form: Form,
@@ -120,9 +142,10 @@ pub struct SendState {
 }
 
 impl SendState {
-    pub fn new(account: u32, total_balance_sats: u64, config: Config) -> Self {
-        let form = make_send_form(total_balance_sats);
+    pub fn new(chain: ChainId, account: u32, total_balance_sats: u64, config: Config) -> Self {
+        let form = make_send_form(chain, total_balance_sats);
         Self {
+            chain,
             account,
             total_balance_sats,
             form,
@@ -162,50 +185,49 @@ impl SendState {
 
     fn try_submit(&mut self, wallet: &UnlockedWallet) {
         let recipient_str = self.field_text(FIELD_RECIPIENT);
-        if let Err(e) = validate_recipient(&recipient_str) {
+        if let Err(e) = validate_recipient(&recipient_str, self.chain) {
             self.phase = Phase::Error(format!("recipient: {e}"));
             return;
         }
 
         let amount_str = self.field_text(FIELD_AMOUNT);
-        let amount_btc: f64 = match amount_str.parse() {
+        let amount_val: f64 = match amount_str.parse() {
             Ok(v) if v > 0.0 => v,
             _ => {
                 self.phase = Phase::Error("invalid amount".into());
                 return;
             }
         };
-        let amount_sats = (amount_btc * 1e8).round() as u64;
+        // Scale to smallest unit: sats for BTC-family, wei for ETH, piconero for XMR.
+        let amount_atoms = chain_amount_atoms(self.chain, amount_val);
 
-        if amount_sats > self.total_balance_sats {
+        if amount_atoms > self.total_balance_sats as u128 {
             self.phase = Phase::Error(format!(
-                "amount ({amount_sats} sats) exceeds balance ({} sats)",
+                "amount exceeds balance ({} available)",
                 self.total_balance_sats
             ));
             return;
         }
 
-        let chain_cfg = self
-            .config
-            .chains
-            .get(&ChainId::Bitcoin)
-            .cloned()
-            .unwrap_or_default();
-
-        let endpoint_url = match first_electrum_url(&chain_cfg) {
-            Some(u) => u,
-            None => {
-                self.phase = Phase::Error("no Electrum endpoint configured".into());
+        let active = match ActiveChain::from_chain_id(self.chain, &self.config) {
+            Ok(a) => a,
+            Err(e) => {
+                self.phase = Phase::Error(format!("chain connect: {e}"));
                 return;
             }
         };
 
-        let fee_rate = if self.selected_tier().unwrap_or("").starts_with("Custom") {
+        // Fee: for Bitcoin, Custom tier reads the sat/vB field. For all other
+        // chains we always call estimate_fee — EVM fee tier semantics differ and
+        // the custom sat/vB field is Bitcoin-only.
+        let fee_rate = if matches!(self.chain, ChainId::Bitcoin | ChainId::BitcoinTestnet)
+            && self.selected_tier().unwrap_or("").starts_with("Custom")
+        {
             let custom_str = self.field_text(FIELD_CUSTOM_FEE);
             match custom_str.parse::<u64>() {
                 Ok(v) if v > 0 => FeeRate::SatsPerVbyte {
                     sats: v,
-                    chain: ChainId::Bitcoin,
+                    chain: self.chain,
                 },
                 _ => {
                     self.phase = Phase::Error("invalid custom fee rate".into());
@@ -214,17 +236,8 @@ impl SendState {
             }
         } else {
             let target = self.fee_target_blocks();
-            debug!("estimating fee for {target} blocks");
-            let electrum_fee = match electrum_connect(&endpoint_url) {
-                Ok(c) => c,
-                Err(e) => {
-                    self.phase = Phase::Error(format!("Electrum connect (fee): {e}"));
-                    return;
-                }
-            };
-            let chain_fee = BitcoinChain::new(NetworkParams::BITCOIN_MAINNET, electrum_fee)
-                .with_purpose(Purpose::Bip84);
-            match chain_fee.estimate_fee(target) {
+            debug!("estimating fee for {target} blocks on {:?}", self.chain);
+            match active.estimate_fee(target) {
                 Ok(r) => r,
                 Err(e) => {
                     self.phase = Phase::Error(format!("fee estimate failed: {e}"));
@@ -235,85 +248,48 @@ impl SendState {
 
         let rbf = self.rbf_checked();
         let seed = wallet.seed().as_bytes().to_owned();
-        let to_addr = Address::new(recipient_str, ChainId::Bitcoin);
-        let amount = Amount::from_atoms(amount_sats as u128, ChainId::Bitcoin);
+        let to_addr = Address::new(recipient_str, self.chain);
+        let amount = Amount::from_atoms(amount_atoms, self.chain);
+        let chain_cfg = self
+            .config
+            .chains
+            .get(&self.chain)
+            .cloned()
+            .unwrap_or_default();
 
-        // `from` field is unused by multi-source path; a dummy address satisfies SendParams.
         let send_params = hodl_core::SendParams {
-            from: Address::new(String::new(), ChainId::Bitcoin),
+            from: Address::new(String::new(), self.chain),
             to: to_addr,
             amount,
             fee: fee_rate,
         };
 
-        // Build: coin-select across all funded addresses in the gap scan.
-        let electrum_build = match electrum_connect(&endpoint_url) {
-            Ok(c) => c,
-            Err(e) => {
-                self.phase = Phase::Error(format!("Electrum connect (build): {e}"));
-                return;
-            }
-        };
-        let chain_build = BitcoinChain::new(NetworkParams::BITCOIN_MAINNET, electrum_build)
-            .with_purpose(Purpose::Bip84);
-
-        debug!("building multi-source tx for account {}", self.account);
-        let (selected_utxos, hints, change_sats) = match chain_build.build_tx_multi_source(
+        debug!(
+            "build_send for account {} on {:?}",
+            self.account, self.chain
+        );
+        let prepared = match active.build_send(
             &seed,
             self.account,
             &send_params,
-            rbf,
-            chain_cfg.gap_limit,
+            SendOpts {
+                rbf,
+                gap_limit: chain_cfg.gap_limit,
+            },
         ) {
-            Ok(r) => r,
+            Ok(p) => p,
             Err(e) => {
-                self.phase = Phase::Error(format!("build tx: {e}"));
+                self.phase = Phase::Error(format!("build: {e}"));
                 return;
             }
         };
 
-        // Sign.
-        let electrum_sign = match electrum_connect(&endpoint_url) {
-            Ok(c) => c,
-            Err(e) => {
-                self.phase = Phase::Error(format!("Electrum connect (sign): {e}"));
-                return;
-            }
-        };
-        let chain_sign = BitcoinChain::new(NetworkParams::BITCOIN_MAINNET, electrum_sign)
-            .with_purpose(Purpose::Bip84);
-        let signed = match chain_sign.sign_multi_source(
-            &seed,
-            self.account,
-            &send_params,
-            rbf,
-            &hints,
-            &selected_utxos,
-            change_sats,
-        ) {
-            Ok(s) => s,
-            Err(e) => {
-                self.phase = Phase::Error(format!("sign: {e}"));
-                return;
-            }
-        };
-
-        // Broadcast.
-        let electrum_bc = match electrum_connect(&endpoint_url) {
-            Ok(c) => c,
-            Err(e) => {
-                self.phase = Phase::Error(format!("Electrum connect (broadcast): {e}"));
-                return;
-            }
-        };
-        let chain_bc = BitcoinChain::new(NetworkParams::BITCOIN_MAINNET, electrum_bc)
-            .with_purpose(Purpose::Bip84);
-        match chain_bc.broadcast(signed) {
+        match active.sign_and_broadcast(&seed, self.account, &send_params, prepared) {
             Ok(txid) => {
                 self.phase = Phase::Result(txid.0);
             }
             Err(e) => {
-                self.phase = Phase::Error(format!("broadcast: {e}"));
+                self.phase = Phase::Error(format!("sign/broadcast: {e}"));
             }
         }
     }
@@ -321,19 +297,19 @@ impl SendState {
 
 // ── Form builder ───────────────────────────────────────────────────────────
 
-fn make_send_form(balance_sats: u64) -> Form {
+fn make_send_form(chain: ChainId, balance_atoms: u64) -> Form {
     let mut recipient_field = TextFieldEditor::with_meta(
         FieldMeta::new("recipient address")
             .required(true)
-            .placeholder("bc1q..."),
+            .placeholder(recipient_placeholder(chain)),
         1,
     );
-    recipient_field.validator = Some(mk_validator(validate_recipient));
+    // Inline form validator; closes over chain. Authoritative check is in try_submit.
+    recipient_field.validator = Some(mk_validator(move |s| validate_recipient(s, chain)));
 
-    let balance_btc = balance_sats as f64 / 1e8;
-    let amount_placeholder = format!("0.0 (max {balance_btc:.8} BTC)");
+    let amount_placeholder = format!("0.0 (max {} {})", balance_atoms, chain.ticker());
     let mut amount_field = TextFieldEditor::with_meta(
-        FieldMeta::new("amount (BTC)")
+        FieldMeta::new(format!("amount ({})", chain.ticker()))
             .required(true)
             .placeholder(amount_placeholder),
         1,
@@ -345,7 +321,7 @@ fn make_send_form(balance_sats: u64) -> Form {
     custom_fee_field.validator = Some(mk_validator(validate_custom_fee));
 
     Form::new()
-        .with_title("Send Bitcoin")
+        .with_title(format!("Send {}", chain.display_name()))
         .with_field(Field::SingleLineText(recipient_field))
         .with_field(Field::SingleLineText(amount_field))
         .with_field(Field::Select(SelectField::new(
@@ -359,6 +335,19 @@ fn make_send_form(balance_sats: u64) -> Form {
         .with_field(Field::Submit(SubmitField::new(FieldMeta::new(
             "Sign & broadcast",
         ))))
+}
+
+fn recipient_placeholder(chain: ChainId) -> &'static str {
+    use ChainId::*;
+    match chain {
+        Bitcoin | BitcoinTestnet => "bc1q…",
+        Litecoin => "ltc1q…",
+        Dogecoin => "D…",
+        BitcoinCash => "bitcoincash:q…",
+        NavCoin => "nav1q…",
+        Ethereum | BscMainnet => "0x…",
+        Monero => "4…",
+    }
 }
 
 // ── Event loop ─────────────────────────────────────────────────────────────
@@ -440,8 +429,10 @@ pub fn draw(f: &mut ratatui::Frame, state: &mut SendState) {
 fn draw_form_phase(f: &mut ratatui::Frame, area: Rect, state: &mut SendState) {
     let block = Block::default()
         .title(format!(
-            " hodl • Send — account {} (total {} sats) ",
-            state.account, state.total_balance_sats,
+            " hodl • Send {} — account {} (total {} atoms) ",
+            state.chain.display_name(),
+            state.account,
+            state.total_balance_sats,
         ))
         .borders(Borders::ALL)
         .style(Style::default().fg(Color::Yellow));
@@ -544,34 +535,19 @@ fn draw_error(f: &mut ratatui::Frame, area: Rect, msg: String, state: &mut SendS
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-fn electrum_connect(url: &str) -> hodl_core::Result<hodl_chain_bitcoin::electrum::ElectrumClient> {
-    use hodl_chain_bitcoin::electrum::ElectrumClient;
-    use hodl_core::error::Error;
-
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| Error::Network(format!("invalid Electrum URL: {url}")))?;
-    let (host, port_str) = rest
-        .rsplit_once(':')
-        .ok_or_else(|| Error::Network(format!("invalid Electrum URL: {url}")))?;
-    let port: u16 = port_str
-        .parse()
-        .map_err(|_| Error::Network(format!("invalid port: {url}")))?;
-
-    match scheme {
-        "ssl" | "tls" => ElectrumClient::connect_tls(host, port),
-        _ => ElectrumClient::connect_tcp(host, port),
-    }
-}
-
-fn first_electrum_url(cfg: &ChainConfig) -> Option<String> {
-    cfg.endpoints.iter().find_map(|ep| {
-        if let Endpoint::Electrum { url, .. } = ep {
-            Some(url.clone())
-        } else {
-            None
-        }
-    })
+/// Scale a human-readable decimal amount to the chain's smallest unit.
+///
+/// BTC-family: value is interpreted as the major unit (BTC/LTC/etc.), scaled
+/// by 1e8 to satoshis. ETH-family: value is in ETH, scaled by 1e18 to wei.
+/// Monero: value is in XMR, scaled by 1e12 to piconero.
+fn chain_amount_atoms(chain: ChainId, value: f64) -> u128 {
+    use ChainId::*;
+    let scale: f64 = match chain {
+        Bitcoin | BitcoinTestnet | Litecoin | Dogecoin | BitcoinCash | NavCoin => 1e8,
+        Ethereum | BscMainnet => 1e18,
+        Monero => 1e12,
+    };
+    (value * scale).round() as u128
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -582,18 +558,30 @@ mod tests {
 
     #[test]
     fn validate_recipient_rejects_empty() {
-        assert!(validate_recipient("").is_err());
+        assert!(validate_recipient("", ChainId::Bitcoin).is_err());
     }
 
     #[test]
     fn validate_recipient_rejects_non_bech32() {
-        assert!(validate_recipient("1A1zP1eP5QGefi2DMPTfTL5SLmv7Divf").is_err());
+        assert!(validate_recipient("1A1zP1eP5QGefi2DMPTfTL5SLmv7Divf", ChainId::Bitcoin).is_err());
     }
 
     #[test]
     fn validate_recipient_accepts_p2wpkh() {
         let addr = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
-        assert!(validate_recipient(addr).is_ok());
+        assert!(validate_recipient(addr, ChainId::Bitcoin).is_ok());
+    }
+
+    #[test]
+    fn validate_recipient_accepts_eth_address() {
+        // All-lowercase ETH address (no checksum required for all-lower).
+        let addr = "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed";
+        assert!(validate_recipient(addr, ChainId::Ethereum).is_ok());
+    }
+
+    #[test]
+    fn validate_recipient_rejects_monero() {
+        assert!(validate_recipient("4anything", ChainId::Monero).is_err());
     }
 
     #[test]

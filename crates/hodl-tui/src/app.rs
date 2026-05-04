@@ -216,6 +216,15 @@ impl App {
                     match action {
                         Some(AccountAction::Lock) => self.do_lock(),
                         Some(AccountAction::Quit) => return Ok(()),
+                        Some(AccountAction::ChainSwitched) => {
+                            // Re-load accounts against the new chain. The picker
+                            // already updated `current_chain` on the AccountState.
+                            if let (Screen::Accounts(s), Some(unlocked)) =
+                                (&mut self.screen, &self.unlocked)
+                            {
+                                s.load_accounts(unlocked);
+                            }
+                        }
                         Some(AccountAction::OpenAddressBook) => {
                             let book_path = AddressBook::default_path()
                                 .unwrap_or_else(|_| self.data_root.join("address_book.toml"));
@@ -228,11 +237,16 @@ impl App {
                             self.screen = Screen::Receive(ReceiveState::new(addr, path));
                         }
                         Some(AccountAction::OpenSend {
+                            chain,
                             account,
                             total_balance_sats,
                         }) => {
-                            let send_state =
-                                SendState::new(account, total_balance_sats, self.config.clone());
+                            let send_state = SendState::new(
+                                chain,
+                                account,
+                                total_balance_sats,
+                                self.config.clone(),
+                            );
                             self.screen = Screen::Send(Box::new(send_state));
                         }
                         Some(AccountAction::OpenSettings) => {
