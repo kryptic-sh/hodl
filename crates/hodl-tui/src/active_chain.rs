@@ -321,7 +321,7 @@ pub fn electrum_connect(
         .parse()
         .map_err(|_| Error::Network(format!("invalid port in Electrum URL: {url}")))?;
 
-    match (scheme, proxy) {
+    let mut client = match (scheme, proxy) {
         ("ssl" | "tls", Some(p)) => {
             let host_port = format!("{host}:{port}");
             let pinned = known_hosts
@@ -336,7 +336,7 @@ pub fn electrum_connect(
                     tracing::warn!("failed to save known_hosts.toml: {e}");
                 }
             }
-            Ok(client)
+            client
         }
         ("ssl" | "tls", None) => {
             let host_port = format!("{host}:{port}");
@@ -352,11 +352,21 @@ pub fn electrum_connect(
                     tracing::warn!("failed to save known_hosts.toml: {e}");
                 }
             }
-            Ok(client)
+            client
         }
-        (_, Some(p)) => ElectrumClient::connect_tcp_via_socks5(host, port, p),
-        (_, None) => ElectrumClient::connect_tcp(host, port),
-    }
+        (_, Some(p)) => ElectrumClient::connect_tcp_via_socks5(host, port, p)?,
+        (_, None) => ElectrumClient::connect_tcp(host, port)?,
+    };
+
+    // Negotiate protocol 1.4 explicitly. Without this the NavCoin
+    // electrumx fork defaults to ambient (1.5-style) responses that
+    // don't match our flat-array deserialisation for
+    // blockchain.scripthash.get_history. Verified against
+    // electrum3.nav.community: 1.4 negotiation → standard responses.
+    let (server_id, _proto) = client.server_version("hodl", "1.4")?;
+    tracing::debug!("electrum connected: {url} → {server_id}");
+
+    Ok(client)
 }
 
 #[cfg(test)]
