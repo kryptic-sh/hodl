@@ -1,9 +1,21 @@
 //! Addresses screen — read-only list of used wallet addresses for the
-//! currently-selected chain, populated from a cached WalletScan.
+//! currently-selected chain.
 //!
 //! Opened from the Accounts screen via `d`. Esc/q returns to Accounts.
-//! No background work — the scan is owned by AccountState; this screen
-//! reads it via cloned data passed to AddressesState::new.
+//!
+//! ## Streaming model
+//!
+//! `AddressesState` is **data-less** — it holds only the chain identity
+//! plus the table cursor. The actual `WalletScan` is owned by
+//! `AccountState`, which is kept alive (not stashed) by the App while
+//! the Addresses sub-view is open. Each draw call passes the current
+//! scan in, so as the background scan worker streams new used addresses
+//! into `AccountState.partial_scan`, the table picks them up
+//! automatically — no manual refresh, no parallel state to keep in sync.
+//!
+//! Path strings are computed inside `draw` from `(chain, change, index)`
+//! via a pure formula (`m/{purpose}'/{coin}'/0'/{change}/{index}`) — no
+//! network access required.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hodl_chain_bitcoin::WalletScan;
@@ -26,74 +38,40 @@ pub enum AddressesAction {
     ShowHelp,
 }
 
-/// One row in the address table, pre-formatted for rendering.
-struct AddressRow {
-    index: u32,
-    change: u32,
-    path: String,
-    address: String,
-    confirmed: u64,
-    pending: u64,
-}
-
 pub struct AddressesState {
-    rows: Vec<AddressRow>,
     chain: ChainId,
+    /// BIP-44 purpose for this chain's addresses (44 / 49 / 84 / 86).
+    /// Cached so each draw doesn't re-compute it.
+    purpose: u32,
+    /// SLIP-44 coin type (e.g. 0 for BTC, 60 for ETH). Cached for the same reason.
+    coin: u32,
+    /// Selection is clamped on each draw to the current row count, so it
+    /// remains valid even as the streaming scan grows the table beneath it.
     table_state: TableState,
 }
 
 impl AddressesState {
-    /// Build from a completed `WalletScan` and a parallel slice of derivation
-    /// path strings (one per `scan.used` entry, in order).
-    ///
-    /// Caller is responsible for computing the paths up front — passing a
-    /// closure here would tempt callers into rebuilding an `ActiveChain` (and
-    /// dialing the network) once per row. Compute the paths once outside.
-    ///
-    /// Sort order: receive (change=0) first by index ascending, then change
-    /// (change=1) by index ascending. The first row is selected by default.
-    pub fn new(scan: &WalletScan, chain: ChainId, paths: &[String]) -> Self {
-        assert_eq!(
-            scan.used.len(),
-            paths.len(),
-            "paths must be parallel to scan.used"
-        );
-        let mut rows: Vec<AddressRow> = scan
-            .used
-            .iter()
-            .zip(paths.iter())
-            .map(|(u, path)| AddressRow {
-                index: u.index,
-                change: u.change,
-                path: path.clone(),
-                address: u.address.clone(),
-                confirmed: u.balance.confirmed,
-                pending: u.balance.pending,
-            })
-            .collect();
-
-        // Receive (change=0) first sorted by index, then change (change=1) by index.
-        rows.sort_by_key(|r| (r.change, r.index));
-
+    /// Build a fresh sub-view for `chain`. The selection starts at the first row;
+    /// rendering is driven by the live `WalletScan` passed to [`draw`].
+    pub fn new(chain: ChainId, purpose: u32, coin: u32) -> Self {
         let mut table_state = TableState::default();
-        if !rows.is_empty() {
-            table_state.select(Some(0));
-        }
-
+        table_state.select(Some(0));
         Self {
-            rows,
             chain,
+            purpose,
+            coin,
             table_state,
         }
     }
 
     /// Move the table selection by `delta` rows, wrapping around.
-    pub(crate) fn move_selection(&mut self, delta: i32) {
-        if self.rows.is_empty() {
+    /// `len` is the current row count (caller passes it from the live scan).
+    pub(crate) fn move_selection(&mut self, delta: i32, len: usize) {
+        if len == 0 {
             return;
         }
         let current = self.table_state.selected().unwrap_or(0) as i32;
-        let next = (current + delta).rem_euclid(self.rows.len() as i32) as usize;
+        let next = (current + delta).rem_euclid(len as i32) as usize;
         self.table_state.select(Some(next));
     }
 
@@ -111,7 +89,8 @@ impl AddressesState {
     }
 
     /// Route a keypress. Returns an action when the screen wants to transition.
-    pub fn handle_key(&mut self, key: KeyEvent) -> Option<AddressesAction> {
+    /// `len` is the live row count (caller pulls from the active scan).
+    pub fn handle_key(&mut self, key: KeyEvent, len: usize) -> Option<AddressesAction> {
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d'))
         {
@@ -120,22 +99,22 @@ impl AddressesState {
 
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                self.move_selection(1);
+                self.move_selection(1, len);
                 None
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.move_selection(-1);
+                self.move_selection(-1, len);
                 None
             }
             KeyCode::Char('g') | KeyCode::Home => {
-                if !self.rows.is_empty() {
+                if len > 0 {
                     self.table_state.select(Some(0));
                 }
                 None
             }
             KeyCode::Char('G') | KeyCode::End => {
-                if !self.rows.is_empty() {
-                    self.table_state.select(Some(self.rows.len() - 1));
+                if len > 0 {
+                    self.table_state.select(Some(len - 1));
                 }
                 None
             }
@@ -158,14 +137,28 @@ fn format_atoms(atoms: u64, chain: ChainId) -> String {
     format!("{whole}.{frac:08} {symbol}")
 }
 
-pub fn draw(f: &mut Frame, area: Rect, state: &mut AddressesState) {
+/// Render the Addresses table.
+///
+/// `scan` is the live wallet scan owned by `AccountState` — pass
+/// `account.scan.as_ref().unwrap_or(&account.partial_scan)` so a
+/// completed snapshot wins over an in-flight partial when both exist.
+/// `scanning` controls the footer label (live spinner hint vs. static).
+pub fn draw(
+    f: &mut Frame,
+    area: Rect,
+    state: &mut AddressesState,
+    scan: &WalletScan,
+    scanning: bool,
+) {
     let chain_name = state.chain.display_name();
-    let title = format!(" hodl • Addresses — {chain_name} ");
+    let suffix = if scanning { "  (live)" } else { "" };
+    let title = format!(" hodl • Addresses — {chain_name}{suffix} ");
 
+    let border_color = if scanning { Color::Cyan } else { Color::Green };
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .style(Style::default().fg(Color::Green));
+        .style(Style::default().fg(border_color));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -174,11 +167,31 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AddressesState) {
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(inner);
 
-    if state.rows.is_empty() {
-        // Defensive: `d` is gated on scan being non-empty in account.rs, but
-        // guard here anyway so we never render a blank or panic.
+    // Sort the live scan into receive-first / index-ascending order. The
+    // worker streams in receive-then-change order already, but a partial
+    // mid-scan view may be incomplete — sort defensively.
+    let mut sorted: Vec<&hodl_chain_bitcoin::UsedAddress> = scan.used.iter().collect();
+    sorted.sort_by_key(|u| (u.change, u.index));
+
+    // Clamp the cursor so streaming row deletions / insertions can't
+    // leave the selection past the end. Selecting None when empty so the
+    // table renders cleanly with no highlight.
+    let len = sorted.len();
+    if len == 0 {
+        state.table_state.select(None);
+    } else {
+        let sel = state.table_state.selected().unwrap_or(0).min(len - 1);
+        state.table_state.select(Some(sel));
+    }
+
+    if sorted.is_empty() {
+        let msg = if scanning {
+            "scanning… no used addresses found yet"
+        } else {
+            "no used addresses"
+        };
         let p = Paragraph::new(Line::from(Span::styled(
-            "no used addresses",
+            msg,
             Style::default().fg(Color::DarkGray),
         )))
         .alignment(Alignment::Center);
@@ -201,22 +214,24 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AddressesState) {
         .style(Style::default().fg(Color::Cyan));
 
         let chain = state.chain;
-        let rows: Vec<Row> = state
-            .rows
+        let purpose = state.purpose;
+        let coin = state.coin;
+        let rows: Vec<Row> = sorted
             .iter()
-            .map(|r| {
-                let (type_label, type_color) = if r.change == 0 {
+            .map(|u| {
+                let (type_label, type_color) = if u.change == 0 {
                     ("recv", Color::Green)
                 } else {
                     ("chg", Color::Yellow)
                 };
+                let path = format!("m/{purpose}'/{coin}'/0'/{}/{}", u.change, u.index);
                 Row::new(vec![
-                    ratatui::widgets::Cell::from(r.index.to_string()),
+                    ratatui::widgets::Cell::from(u.index.to_string()),
                     ratatui::widgets::Cell::from(type_label).style(Style::default().fg(type_color)),
-                    ratatui::widgets::Cell::from(r.path.clone()),
-                    ratatui::widgets::Cell::from(r.address.clone()),
-                    ratatui::widgets::Cell::from(format_atoms(r.confirmed, chain)),
-                    ratatui::widgets::Cell::from(format_atoms(r.pending, chain)),
+                    ratatui::widgets::Cell::from(path),
+                    ratatui::widgets::Cell::from(u.address.clone()),
+                    ratatui::widgets::Cell::from(format_atoms(u.balance.confirmed, chain)),
+                    ratatui::widgets::Cell::from(format_atoms(u.balance.pending, chain)),
                 ])
             })
             .collect();
@@ -238,8 +253,13 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AddressesState) {
         f.render_stateful_widget(table, chunks[0], &mut state.table_state);
     }
 
+    let footer_text = if scanning {
+        "j/k move • g/G top/bottom • q/Esc back • ? help • streaming live"
+    } else {
+        "j/k move • g/G top/bottom • q/Esc back • ? help"
+    };
     let footer = Paragraph::new(Line::from(Span::styled(
-        "j/k move • g/G top/bottom • q/Esc back • ? help",
+        footer_text,
         Style::default().fg(Color::DarkGray),
     )))
     .alignment(Alignment::Center);

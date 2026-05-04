@@ -85,6 +85,26 @@ and this project adheres to
 
 ### Added
 
+- **Streaming Addresses sub-view.** Pressing `d` on the Accounts screen now
+  opens the Addresses table immediately as soon as **any** used address has been
+  discovered — either from a completed scan or from the in-flight partial
+  accumulator — instead of being gated on scan completion. The background scan
+  worker keeps running while the sub-view is open: the Addresses screen polls
+  the same `ScanEvent` channel as the Accounts screen, so each new used address
+  appears in the table within ~80 ms of being discovered. Architecture change:
+  `Screen::Addresses` is now a struct variant holding both the `AddressesState`
+  (data-less — just chain identity, BIP-44 purpose, SLIP-44 coin, and table
+  cursor) and the live `Box<AccountState>`. The previous `accounts_stash` field
+  on `App` is gone — `AccountState` now moves directly between
+  `Screen::Accounts` and `Screen::Addresses` and back. `addresses::draw` takes
+  the live `&WalletScan` per call and re-derives path strings from
+  `(chain, change, index)` on the fly. Selection is clamped on each draw so
+  streaming inserts can't leave the cursor past the end. Title shows
+  `Addresses — <chain>  (live)` with cyan border while scanning; switches to
+  green border once the scan completes. Footer reads `… • streaming live` during
+  scan. Completed scans are still persisted to the on-disk cache from the
+  Addresses branch (same logic as the Accounts branch).
+
 - **Encrypted on-disk scan cache + `R` resync keybind.** Scan results
   (`WalletScan`) are now persisted per-wallet, per-chain at
   `<data_root>/cache/<wallet_name>/<ticker>.cache`. Each file is a

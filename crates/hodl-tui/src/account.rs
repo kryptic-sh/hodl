@@ -160,6 +160,15 @@ impl AccountState {
         self.pending_scan.is_some()
     }
 
+    /// Live scan view for the Addresses sub-view: prefer the completed
+    /// snapshot when present (so cache-prime + resync shows full data),
+    /// otherwise expose the in-flight partial accumulator. Returns the
+    /// partial empty-default if neither is populated yet — callers can
+    /// check `scan.used.is_empty()` to detect that case.
+    pub fn live_scan(&self) -> &WalletScan {
+        self.scan.as_ref().unwrap_or(&self.partial_scan)
+    }
+
     /// Tick the scanning spinner (called by the event loop on `TryRecvError::Empty`).
     pub fn tick_spinner(&mut self) {
         if let Some(ref mut s) = self.scanning_spinner {
@@ -401,13 +410,18 @@ impl AccountState {
             KeyCode::Char('b') if !self.is_scanning() => {
                 return Some(AccountAction::OpenAddressBook);
             }
+            // `d` opens the streaming Addresses sub-view as long as *some*
+            // used address is known — either from a completed scan or from
+            // the in-flight partial accumulator. The sub-view borrows the
+            // live scan from this AccountState so new used addresses appear
+            // as the worker discovers them.
             KeyCode::Char('d')
-                if !self.is_scanning()
-                    && self
-                        .scan
-                        .as_ref()
-                        .map(|s| !s.used.is_empty())
-                        .unwrap_or(false) =>
+                if self
+                    .scan
+                    .as_ref()
+                    .map(|s| !s.used.is_empty())
+                    .unwrap_or(false)
+                    || !self.partial_scan.used.is_empty() =>
             {
                 return Some(AccountAction::OpenAddresses);
             }

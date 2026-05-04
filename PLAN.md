@@ -360,13 +360,10 @@ get re-prioritised.
 
 ### TUI / UX
 
-- **Streaming Addresses sub-view.** Today the sub-view opens on the post-scan
-  snapshot via `accounts_stash`. Live updates while scan is in flight would need
-  a shared `Arc<Mutex<WalletScan>>` partial state and a poll loop in the
-  Addresses screen. Snapshot semantics are intentional v1.
 - **Per-row spinner in Addresses sub-view.** Currently each row renders the
-  cached value or a static dash. Once the streaming sub-view lands, in-flight
-  rows should show a spinner.
+  cached value or a static dash. Now that the sub-view streams live, in-flight
+  rows could show a spinner indicator next to balances that are still being
+  fetched (vs. final values).
 - **`format_atoms` decimals per chain.** The Addresses table's `format_atoms`
   assumes 8 decimals (BTC family). Wrong for ETH (18) and Monero (12); not yet
   visible because EVM/Monero scans degenerate to a single row, but will surface

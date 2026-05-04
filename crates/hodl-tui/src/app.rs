@@ -39,7 +39,14 @@ enum Screen {
     Onboarding(Box<OnboardingState>),
     Accounts(Box<AccountState>),
     AddressBook(Box<AddressBookState>),
-    Addresses(Box<AddressesState>),
+    /// Streaming Addresses sub-view. Holds the live `AccountState` so the
+    /// scan worker keeps running and new used addresses appear in the
+    /// table as they're discovered. On close the `accounts` field is
+    /// moved back into `Screen::Accounts` so no re-scan triggers.
+    Addresses {
+        addresses: Box<AddressesState>,
+        accounts: Box<AccountState>,
+    },
     Receive(ReceiveState),
     Send(Box<SendState>),
     Settings,
@@ -64,10 +71,6 @@ pub struct App {
     /// from the unlocked seed so re-locking drops both the in-memory
     /// hashmap and the key (zeroized via `ScanCache::Drop`).
     scan_cache: Option<ScanCache>,
-    /// Stashed AccountState while the Addresses sub-view is open.
-    /// Preserves the cached WalletScan so re-entering Accounts does not
-    /// trigger a fresh network round-trip.
-    accounts_stash: Option<Box<AccountState>>,
 }
 
 impl App {
@@ -89,7 +92,6 @@ impl App {
             help_overlay: None,
             known_hosts,
             scan_cache: None,
-            accounts_stash: None,
         })
     }
 
@@ -111,7 +113,6 @@ impl App {
             help_overlay: None,
             known_hosts,
             scan_cache: None,
-            accounts_stash: None,
         })
     }
 
@@ -134,7 +135,6 @@ impl App {
             help_overlay: None,
             known_hosts,
             scan_cache: None,
-            accounts_stash: None,
         })
     }
 
@@ -160,7 +160,6 @@ impl App {
             help_overlay: None,
             known_hosts,
             scan_cache: None,
-            accounts_stash: None,
         })
     }
 
@@ -380,50 +379,28 @@ impl App {
                             }
                         }
                         Some(AccountAction::OpenAddresses) => {
-                            // Take the AccountState out of the screen so we
-                            // can stash it. The screen temporarily holds a
-                            // sentinel Lock value while we build Addresses.
+                            // Move AccountState into Screen::Addresses so the
+                            // scan worker keeps running and the table picks
+                            // up new used addresses live. The path components
+                            // (purpose + coin) are pure functions of the
+                            // chain, computed once at open and cached on
+                            // AddressesState — no network access.
                             let old_screen = std::mem::replace(&mut self.screen, Screen::Lock);
                             if let Screen::Accounts(acc_state) = old_screen {
                                 let chain = acc_state.current_chain;
-                                let scan = acc_state.scan.clone();
-                                self.accounts_stash = Some(acc_state);
-
-                                match scan {
-                                    None => {
-                                        tracing::debug!(
-                                            "OpenAddresses fired with no scan — ignoring"
-                                        );
-                                        if let Some(stashed) = self.accounts_stash.take() {
-                                            self.screen = Screen::Accounts(stashed);
-                                        }
-                                    }
-                                    Some(scan) => {
-                                        // Compute paths up front — no network.
-                                        // BIP-44 family path: m/{purpose}'/{coin}'/{account}'/{change}/{index}
-                                        // BTC family purpose comes from the chain's default_send_purpose;
-                                        // EVM and Monero are pinned at BIP-44.
-                                        let coin = chain.slip44();
-                                        let purpose: u32 = match chain {
-                                            ChainId::Ethereum
-                                            | ChainId::BscMainnet
-                                            | ChainId::Monero => 44,
-                                            _ => hodl_chain_bitcoin::BitcoinChain::default_send_purpose(chain).number(),
-                                        };
-                                        let paths: Vec<String> = scan
-                                            .used
-                                            .iter()
-                                            .map(|u| {
-                                                format!(
-                                                    "m/{purpose}'/{coin}'/0'/{}/{}",
-                                                    u.change, u.index
-                                                )
-                                            })
-                                            .collect();
-                                        let addr_state = AddressesState::new(&scan, chain, &paths);
-                                        self.screen = Screen::Addresses(Box::new(addr_state));
-                                    }
-                                }
+                                let coin = chain.slip44();
+                                let purpose: u32 = match chain {
+                                    ChainId::Ethereum | ChainId::BscMainnet | ChainId::Monero => 44,
+                                    _ => hodl_chain_bitcoin::BitcoinChain::default_send_purpose(
+                                        chain,
+                                    )
+                                    .number(),
+                                };
+                                let addr_state = AddressesState::new(chain, purpose, coin);
+                                self.screen = Screen::Addresses {
+                                    addresses: Box::new(addr_state),
+                                    accounts: acc_state,
+                                };
                             }
                         }
                         Some(AccountAction::OpenSend {
@@ -546,12 +523,58 @@ impl App {
                         }
                     }
                 }
-                Screen::Addresses(_) => {
-                    if !event::poll(Duration::from_millis(250))? {
+                Screen::Addresses { .. } => {
+                    // Poll the live scan worker held by the embedded
+                    // AccountState — same channel used by the Accounts
+                    // screen — so streaming Used events arrive while the
+                    // sub-view is open. Persist completed scans to the
+                    // on-disk cache exactly like the Accounts branch.
+                    if let Screen::Addresses { accounts, .. } = &mut self.screen
+                        && accounts.poll_scan()
+                    {
+                        if let Some(scan) = accounts.completed_scan.take()
+                            && let Some(cache) = self.scan_cache.as_mut()
+                        {
+                            cache.put(accounts.current_chain, scan);
+                        }
                         terminal.draw(|f| {
                             let area = f.area();
-                            if let Screen::Addresses(s) = &mut self.screen {
-                                addresses::draw(f, area, s);
+                            if let Screen::Addresses {
+                                addresses,
+                                accounts,
+                                ..
+                            } = &mut self.screen
+                            {
+                                let scanning = accounts.is_scanning();
+                                addresses::draw(f, area, addresses, accounts.live_scan(), scanning);
+                            }
+                            if let Some(ref mut overlay) = self.help_overlay {
+                                overlay.draw(f, area);
+                            }
+                        })?;
+                        continue;
+                    }
+
+                    // Short poll while scanning so streaming feels live;
+                    // longer when idle so we don't burn CPU.
+                    let scanning = matches!(&self.screen, Screen::Addresses { accounts, .. } if accounts.is_scanning());
+                    let wait = if scanning {
+                        Duration::from_millis(80)
+                    } else {
+                        Duration::from_millis(250)
+                    };
+
+                    if !event::poll(wait)? {
+                        terminal.draw(|f| {
+                            let area = f.area();
+                            if let Screen::Addresses {
+                                addresses,
+                                accounts,
+                                ..
+                            } = &mut self.screen
+                            {
+                                let scanning = accounts.is_scanning();
+                                addresses::draw(f, area, addresses, accounts.live_scan(), scanning);
                             }
                             if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
@@ -577,8 +600,14 @@ impl App {
                         }
                         terminal.draw(|f| {
                             let area = f.area();
-                            if let Screen::Addresses(s) = &mut self.screen {
-                                addresses::draw(f, area, s);
+                            if let Screen::Addresses {
+                                addresses,
+                                accounts,
+                                ..
+                            } = &mut self.screen
+                            {
+                                let scanning = accounts.is_scanning();
+                                addresses::draw(f, area, addresses, accounts.live_scan(), scanning);
                             }
                             if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
@@ -587,15 +616,25 @@ impl App {
                         continue;
                     }
 
-                    // Mouse scroll: one row per event.
-                    if let (Event::Mouse(m), Screen::Addresses(s)) = (&ev, &mut self.screen) {
+                    // Mouse scroll: one row per event. `len` is the live
+                    // row count from the current scan view.
+                    if let (
+                        Event::Mouse(m),
+                        Screen::Addresses {
+                            addresses,
+                            accounts,
+                            ..
+                        },
+                    ) = (&ev, &mut self.screen)
+                    {
+                        let len = accounts.live_scan().used.len();
                         match m.kind {
                             MouseEventKind::ScrollUp => {
-                                s.move_selection(-1);
+                                addresses.move_selection(-1, len);
                                 self.last_activity = Instant::now();
                             }
                             MouseEventKind::ScrollDown => {
-                                s.move_selection(1);
+                                addresses.move_selection(1, len);
                                 self.last_activity = Instant::now();
                             }
                             _ => {}
@@ -603,10 +642,15 @@ impl App {
                     }
 
                     let action = match &mut self.screen {
-                        Screen::Addresses(s) => {
+                        Screen::Addresses {
+                            addresses,
+                            accounts,
+                            ..
+                        } => {
                             if let Event::Key(k) = ev {
                                 if k.kind == KeyEventKind::Press {
-                                    s.handle_key(k)
+                                    let len = accounts.live_scan().used.len();
+                                    addresses.handle_key(k, len)
                                 } else {
                                     None
                                 }
@@ -619,28 +663,39 @@ impl App {
 
                     match action {
                         Some(AddressesAction::Close) => {
-                            // Restore the stashed AccountState so the cached
-                            // WalletScan is preserved and no re-scan is needed.
-                            if let Some(stashed) = self.accounts_stash.take() {
-                                self.screen = Screen::Accounts(stashed);
+                            // Move AccountState back into Screen::Accounts so
+                            // the live scan continues there with no re-scan.
+                            let old_screen = std::mem::replace(&mut self.screen, Screen::Lock);
+                            if let Screen::Addresses { accounts, .. } = old_screen {
+                                self.screen = Screen::Accounts(accounts);
                             } else {
-                                // Fallback: rebuild and re-scan if the stash was
-                                // somehow lost.
                                 self.enter_accounts();
                             }
                         }
                         Some(AddressesAction::Quit) => return Ok(()),
                         Some(AddressesAction::ShowHelp) => {
-                            if let Screen::Addresses(s) = &self.screen {
+                            if let Screen::Addresses { addresses, .. } = &self.screen {
                                 self.help_overlay =
-                                    Some(HelpOverlay::new("Addresses", s.help_lines()));
+                                    Some(HelpOverlay::new("Addresses", addresses.help_lines()));
                             }
                         }
                         None => {
                             terminal.draw(|f| {
                                 let area = f.area();
-                                if let Screen::Addresses(s) = &mut self.screen {
-                                    addresses::draw(f, area, s);
+                                if let Screen::Addresses {
+                                    addresses,
+                                    accounts,
+                                    ..
+                                } = &mut self.screen
+                                {
+                                    let scanning = accounts.is_scanning();
+                                    addresses::draw(
+                                        f,
+                                        area,
+                                        addresses,
+                                        accounts.live_scan(),
+                                        scanning,
+                                    );
                                 }
                             })?;
                         }
