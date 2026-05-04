@@ -164,24 +164,13 @@ impl App {
                         }
                         LockOutcome::Unlocked(u) => {
                             self.unlocked = Some(u);
-                            // Draw the empty Accounts screen first so the
-                            // "loading accounts…" placeholder replaces the
-                            // lingering "decrypting…" spinner from the lock
-                            // screen *before* the blocking Electrum fetch
-                            // begins. Otherwise the spinner stays on screen
-                            // for the full balance-query duration.
-                            let acc_state = self.make_accounts();
-                            self.screen = Screen::Accounts(Box::new(acc_state));
-                            terminal.draw(|f| {
-                                if let Screen::Accounts(s) = &mut self.screen {
-                                    account::draw(f, f.area(), s);
-                                }
-                            })?;
-                            if let (Screen::Accounts(s), Some(unlocked)) =
-                                (&mut self.screen, &self.unlocked)
-                            {
-                                s.load_accounts(unlocked);
+                            // Build the Accounts screen and immediately kick off the
+                            // background load so the animated spinner appears at once.
+                            let mut acc_state = self.make_accounts();
+                            if let Some(unlocked) = &self.unlocked {
+                                acc_state.start_load(unlocked);
                             }
+                            self.screen = Screen::Accounts(Box::new(acc_state));
                         }
                     }
                 }
@@ -199,12 +188,43 @@ impl App {
                     }
                 }
                 Screen::Accounts(_) => {
+                    // While a background load is in flight, reset `last_activity`
+                    // so the idle timeout cannot fire mid-load.
+                    if let Screen::Accounts(s) = &self.screen
+                        && s.is_loading()
+                    {
+                        self.last_activity = Instant::now();
+                    }
+
                     if self.last_activity.elapsed() >= self.idle_timeout {
                         self.do_lock();
                         continue;
                     }
 
-                    if !event::poll(Duration::from_millis(250))? {
+                    // Poll the background load channel before waiting for events.
+                    // If data just arrived we redraw immediately; if still empty
+                    // we fall through to event::poll with the short timeout.
+                    if let Screen::Accounts(s) = &mut self.screen
+                        && s.poll_load()
+                    {
+                        // State changed (rows arrived or error) — redraw.
+                        terminal.draw(|f| {
+                            let area = f.area();
+                            account::draw(f, area, s);
+                        })?;
+                        continue;
+                    }
+
+                    // Use a short timeout while loading so the spinner animates
+                    // smoothly; fall back to 250 ms when idle.
+                    let loading = matches!(&self.screen, Screen::Accounts(s) if s.is_loading());
+                    let wait = if loading {
+                        Duration::from_millis(80)
+                    } else {
+                        Duration::from_millis(250)
+                    };
+
+                    if !event::poll(wait)? {
                         terminal.draw(|f| {
                             let area = f.area();
                             if let Screen::Accounts(s) = &mut self.screen {
@@ -260,6 +280,8 @@ impl App {
                         Screen::Accounts(s) => {
                             if let Event::Key(k) = ev {
                                 if k.kind == KeyEventKind::Press {
+                                    // handle_key internally blocks row-dependent
+                                    // actions while is_loading() is true.
                                     s.handle_key(k)
                                 } else {
                                     None
@@ -280,7 +302,7 @@ impl App {
                             if let (Screen::Accounts(s), Some(unlocked)) =
                                 (&mut self.screen, &self.unlocked)
                             {
-                                s.load_accounts(unlocked);
+                                s.start_load(unlocked);
                             }
                         }
                         Some(AccountAction::OpenAddressBook) => {
@@ -395,7 +417,7 @@ impl App {
                         Some(AddressBookAction::Close) => {
                             let mut acc_state = self.make_accounts();
                             if let Some(unlocked) = &self.unlocked {
-                                acc_state.load_accounts(unlocked);
+                                acc_state.start_load(unlocked);
                             }
                             self.screen = Screen::Accounts(Box::new(acc_state));
                         }
@@ -476,7 +498,7 @@ impl App {
                         Some(ReceiveAction::Back) => {
                             let mut acc_state = self.make_accounts();
                             if let Some(unlocked) = &self.unlocked {
-                                acc_state.load_accounts(unlocked);
+                                acc_state.start_load(unlocked);
                             }
                             self.screen = Screen::Accounts(Box::new(acc_state));
                         }
@@ -513,7 +535,7 @@ impl App {
                         SendAction::Back | SendAction::Quit => {
                             let mut acc_state = self.make_accounts();
                             if let Some(unlocked) = &self.unlocked {
-                                acc_state.load_accounts(unlocked);
+                                acc_state.start_load(unlocked);
                             }
                             self.screen = Screen::Accounts(Box::new(acc_state));
                         }
@@ -531,14 +553,14 @@ impl App {
                             self.idle_timeout = idle_timeout_from_config(&self.config);
                             let mut acc_state = self.make_accounts();
                             if let Some(unlocked) = &self.unlocked {
-                                acc_state.load_accounts(unlocked);
+                                acc_state.start_load(unlocked);
                             }
                             self.screen = Screen::Accounts(Box::new(acc_state));
                         }
                         SettingsAction::Back => {
                             let mut acc_state = self.make_accounts();
                             if let Some(unlocked) = &self.unlocked {
-                                acc_state.load_accounts(unlocked);
+                                acc_state.start_load(unlocked);
                             }
                             self.screen = Screen::Accounts(Box::new(acc_state));
                         }

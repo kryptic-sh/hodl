@@ -15,6 +15,16 @@ and this project adheres to
   all screens. `lock.rs` migrated from inline `spinner_frame: usize` + literal
   frame array to `Spinner`; behaviour is identical.
 
+- **Account loading is now off-thread** — `start_load` spawns a background
+  thread that opens the Electrum/RPC connection, derives 5 addresses, and
+  queries balances. The event loop polls `pending_load.try_recv()` at 80 ms
+  intervals while loading; the animated `loading accounts… ⠋` spinner replaces
+  the former static placeholder. Navigation keys that require loaded rows
+  (`r`/`s`/`b`/`S`/`p`) are suppressed during load; `q` and Ctrl-C/D always
+  work. Seed bytes are zeroized in the thread before exit. Chain-switch and
+  screen-return paths (`ChainSwitched`, address book, receive, send, settings)
+  all call `start_load` instead of the old synchronous `load_accounts`.
+
 ### Fixed
 
 - **Vault unlock no longer freezes the TUI** — argon2id KDF runs on a background
