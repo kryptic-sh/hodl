@@ -31,6 +31,20 @@ and this project adheres to
   BTC-chain family.
 - LTC / DOGE / BCH / NAV send dispatch in `active_chain.rs` is no longer gated —
   every BTC-family chain has a working `build_send` / `sign_multi_source` path.
+
+### Fixed
+
+- **Wrong-chain address protection in `decode_address_to_script`** — the signer
+  now validates legacy P2PKH addresses against the active chain's `p2pkh_prefix`
+  byte (and CashAddr against the chain's HRP). Previously, sending DOGE to a BTC
+  `1…` address would silently encode the wrong scriptPubKey and burn the funds.
+  Now returns `Error::Codec` naming the expected chain.
+- **TUI recipient validator accepts legacy + CashAddr addresses** for the chains
+  that need them. Bitcoin / LTC / NAV / BTC-testnet accept bech32 segwit-v0
+  (preferred) or legacy P2PKH base58check; DOGE accepts only legacy P2PKH; BCH
+  accepts only CashAddr. The previous validator demanded bech32 for the entire
+  BTC family, which silently blocked send for DOGE/BCH/legacy-BTC even though
+  the chain crate supported them.
 - **Multi-source UTXO**: Bitcoin send now aggregates UTXOs across every funded
   address in the gap-scan, coin-selecting across the merged pool. Closes the
   v0.2.0 deferred item where wallets with funds spread over multiple derived

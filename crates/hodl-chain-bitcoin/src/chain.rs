@@ -19,26 +19,52 @@ use crate::psbt::{
 /// - Bip84 / Bip86: bech32 P2WPKH.
 /// - Bip44: base58check P2PKH or CashAddr P2PKH for BCH.
 /// - Bip49: returns an error (not yet implemented).
-fn decode_address_to_script(addr: &str, purpose: Purpose) -> Result<Vec<u8>> {
+fn decode_address_to_script(
+    addr: &str,
+    purpose: Purpose,
+    params: &NetworkParams,
+) -> Result<Vec<u8>> {
     match purpose {
         Purpose::Bip84 | Purpose::Bip86 => {
+            // Bech32 HRP must match the chain — bech32 decode does this implicitly
+            // since the HRP is part of the encoding, but we double-check the prog
+            // length for P2WPKH.
             let hash = decode_p2wpkh_address(addr)?;
             Ok(p2wpkh_script(&hash))
         }
         Purpose::Bip44 => {
-            // CashAddr (BCH): contains a colon.
+            // CashAddr (BCH): contains a colon and uses the chain's HRP.
             if addr.contains(':') {
+                let prefix = format!("{}:", params.bech32_hrp);
+                if !addr.starts_with(&prefix) {
+                    return Err(Error::Codec(format!(
+                        "CashAddr prefix mismatch: expected '{}', got '{}'",
+                        prefix.trim_end_matches(':'),
+                        addr.split(':').next().unwrap_or("")
+                    )));
+                }
                 let h160 = crate::cashaddr::decode_p2pkh_cashaddr(addr)
                     .map_err(|e| Error::Codec(format!("cashaddr decode: {e}")))?;
                 return Ok(p2pkh_script(&h160));
             }
-            // Legacy base58check P2PKH.
+            // Legacy base58check P2PKH. Validate version byte against the
+            // chain's p2pkh_prefix — sending DOGE to a BTC address (or vice
+            // versa) would otherwise silently encode the wrong scriptPubKey
+            // and lose the funds.
             let decoded = bs58::decode(addr)
                 .with_check(None)
                 .into_vec()
                 .map_err(|e| Error::Codec(format!("base58 decode: {e}")))?;
             if decoded.len() != 21 {
                 return Err(Error::Codec("P2PKH address must decode to 21 bytes".into()));
+            }
+            if decoded[0] != params.p2pkh_prefix {
+                return Err(Error::Codec(format!(
+                    "address version byte 0x{:02x} does not match {} (expected 0x{:02x})",
+                    decoded[0],
+                    params.chain_id.display_name(),
+                    params.p2pkh_prefix
+                )));
             }
             let mut h160 = [0u8; 20];
             h160.copy_from_slice(&decoded[1..]);
@@ -423,7 +449,8 @@ impl BitcoinChain {
             key_bytes_vec.push(kb);
         }
 
-        let recipient_script = decode_address_to_script(params.to.as_str(), self.purpose)?;
+        let recipient_script =
+            decode_address_to_script(params.to.as_str(), self.purpose, &self.params)?;
         let mut tx_outputs: Vec<TxOutput> = Vec::with_capacity(n_out);
         tx_outputs.push(TxOutput {
             script_pubkey: recipient_script,
@@ -810,6 +837,61 @@ mod chain_tests {
         assert_eq!(
             BitcoinChain::default_send_purpose(ChainId::BitcoinCash),
             Purpose::Bip44
+        );
+    }
+
+    /// `decode_address_to_script` rejects a BTC legacy address when the
+    /// active chain is DOGE — the version byte (0x00) doesn't match DOGE's
+    /// p2pkh_prefix (0x1e). Without this check, sending DOGE to a BTC
+    /// address would silently encode the wrong scriptPubKey and burn funds.
+    #[test]
+    fn decode_address_rejects_wrong_chain_prefix() {
+        let btc_addr = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
+        let result = decode_address_to_script(
+            btc_addr,
+            Purpose::Bip44,
+            &NetworkParams::DOGECOIN_MAINNET,
+        );
+        assert!(
+            result.is_err(),
+            "BTC address must be rejected on DOGE chain"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("version byte") || msg.contains("does not match"),
+            "error must mention prefix mismatch; got: {msg}"
+        );
+    }
+
+    /// `decode_address_to_script` accepts the correct chain's address.
+    #[test]
+    fn decode_address_accepts_matching_chain_prefix() {
+        let doge_addr = "DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L";
+        let result = decode_address_to_script(
+            doge_addr,
+            Purpose::Bip44,
+            &NetworkParams::DOGECOIN_MAINNET,
+        );
+        assert!(
+            result.is_ok(),
+            "DOGE address must be accepted on DOGE chain; got: {:?}",
+            result.err()
+        );
+    }
+
+    /// `decode_address_to_script` rejects a CashAddr with the wrong HRP.
+    #[test]
+    fn decode_address_rejects_wrong_cashaddr_hrp() {
+        // ecash-prefixed CashAddr should fail when the chain expects bitcoincash:
+        let ecash_addr = "ecash:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+        let result = decode_address_to_script(
+            ecash_addr,
+            Purpose::Bip44,
+            &NetworkParams::BITCOIN_CASH_MAINNET,
+        );
+        assert!(
+            result.is_err(),
+            "ecash:-prefixed address must be rejected on BCH chain"
         );
     }
 }

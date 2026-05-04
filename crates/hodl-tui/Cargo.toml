@@ -16,6 +16,7 @@ hodl-chain-bitcoin.workspace = true
 hodl-chain-ethereum.workspace = true
 hodl-chain-monero.workspace = true
 bech32.workspace = true
+bs58.workspace = true
 hjkl-form.workspace = true
 hjkl-ratatui.workspace = true
 hjkl-picker.workspace = true

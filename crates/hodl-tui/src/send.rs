@@ -66,32 +66,69 @@ pub enum SendAction {
 
 /// Validate a recipient address for the given chain.
 ///
-/// Bitcoin family uses bech32 segwit v0 P2WPKH. Note: DOGE/BCH/NAV don't
-/// actually use bech32 in practice, but the TUI gates those chains' send
-/// path earlier (build_send returns an error), so the validator is moot.
-/// Ethereum family uses EIP-55 hex. Monero send is not yet implemented.
+/// Per chain:
+/// - BTC / BTC-testnet / LTC / NAV: bech32 segwit v0 (P2WPKH) preferred,
+///   legacy P2PKH base58check accepted as fallback.
+/// - DOGE: legacy P2PKH base58check only — DOGE never deployed bech32.
+/// - BCH: CashAddr (`bitcoincash:q…`) only — BCH replaced base58 P2PKH.
+/// - ETH / BSC: EIP-55 hex.
+/// - Monero: not yet implemented.
+///
+/// The chain crate's `decode_address_to_script` re-validates against the
+/// chain's prefix bytes so a wrong-chain address is caught at signing time
+/// even if it slips past this front-door check.
 pub fn validate_recipient(s: &str, chain: ChainId) -> std::result::Result<(), String> {
     if s.is_empty() {
         return Err("recipient cannot be empty".into());
     }
     use ChainId::*;
     match chain {
-        Bitcoin | BitcoinTestnet | Litecoin | Dogecoin | BitcoinCash | NavCoin => {
-            match bech32::segwit::decode(s) {
-                Ok((_, ver, prog)) if ver == bech32::segwit::VERSION_0 && prog.len() == 20 => {
-                    Ok(())
-                }
-                Ok(_) => {
-                    Err("address must be a P2WPKH bech32 (witness v0, 20-byte program)".into())
-                }
-                Err(e) => Err(format!("invalid bech32 address: {e}")),
+        Bitcoin | BitcoinTestnet | Litecoin | NavCoin => {
+            // Try bech32 first (the wallet's preferred default).
+            if let Ok((_, ver, prog)) = bech32::segwit::decode(s)
+                && ver == bech32::segwit::VERSION_0
+                && prog.len() == 20
+            {
+                return Ok(());
             }
+            // Fall back to legacy base58check P2PKH.
+            validate_base58_p2pkh(s)
+        }
+        Dogecoin => validate_base58_p2pkh(s),
+        BitcoinCash => {
+            if !s.starts_with("bitcoincash:") {
+                return Err("BCH recipient must be CashAddr (bitcoincash:q…)".into());
+            }
+            // Quick shape check; full polymod verify happens at sign time.
+            if s.len() < 14 {
+                return Err("BCH CashAddr too short".into());
+            }
+            Ok(())
         }
         Ethereum | BscMainnet => hodl_chain_ethereum::address::from_str_normalized(s)
             .map(|_| ())
             .map_err(|e| e.to_string()),
         Monero => Err("Monero send not implemented".into()),
     }
+}
+
+/// Validate a base58check-encoded P2PKH address shape (21 bytes after decode).
+///
+/// Doesn't verify the version byte against any specific chain — that check
+/// happens at the chain crate's `decode_address_to_script` boundary, which
+/// has access to the chain's expected `p2pkh_prefix`.
+fn validate_base58_p2pkh(s: &str) -> std::result::Result<(), String> {
+    let decoded = bs58::decode(s)
+        .with_check(None)
+        .into_vec()
+        .map_err(|e| format!("base58 decode: {e}"))?;
+    if decoded.len() != 21 {
+        return Err(format!(
+            "P2PKH address must decode to 21 bytes (got {})",
+            decoded.len()
+        ));
+    }
+    Ok(())
 }
 
 /// Validate an amount string: positive decimal number of BTC.
@@ -562,14 +599,41 @@ mod tests {
     }
 
     #[test]
-    fn validate_recipient_rejects_non_bech32() {
-        assert!(validate_recipient("1A1zP1eP5QGefi2DMPTfTL5SLmv7Divf", ChainId::Bitcoin).is_err());
+    fn validate_recipient_rejects_garbage() {
+        assert!(validate_recipient("not-an-address", ChainId::Bitcoin).is_err());
     }
 
     #[test]
     fn validate_recipient_accepts_p2wpkh() {
         let addr = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
         assert!(validate_recipient(addr, ChainId::Bitcoin).is_ok());
+    }
+
+    #[test]
+    fn validate_recipient_accepts_legacy_btc() {
+        // Satoshi's address — legacy P2PKH, base58check, version byte 0x00.
+        let addr = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
+        assert!(validate_recipient(addr, ChainId::Bitcoin).is_ok());
+    }
+
+    #[test]
+    fn validate_recipient_accepts_doge_legacy() {
+        // Random valid DOGE address (base58 P2PKH, prefix 0x1e → "D...").
+        let addr = "DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L";
+        assert!(validate_recipient(addr, ChainId::Dogecoin).is_ok());
+    }
+
+    #[test]
+    fn validate_recipient_accepts_bch_cashaddr() {
+        let addr = "bitcoincash:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+        assert!(validate_recipient(addr, ChainId::BitcoinCash).is_ok());
+    }
+
+    #[test]
+    fn validate_recipient_rejects_legacy_for_bch() {
+        // BCH only accepts CashAddr; a base58 P2PKH must fail.
+        let addr = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
+        assert!(validate_recipient(addr, ChainId::BitcoinCash).is_err());
     }
 
     #[test]
