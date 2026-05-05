@@ -12,14 +12,16 @@ use tracing_subscriber::util::SubscriberInitExt;
 use hodl_wallet::storage;
 use hodl_wallet::{WalletMeta, keyring as wallet_keyring};
 
-/// ASCII-art banner. Regenerate with:
+/// ASCII-art banner. Single source of truth lives at
+/// `crates/hodl-tui/src/splash/art.txt` — also embedded by
+/// `hodl_tui::splash::ART`. Regenerate with:
 ///
 /// ```sh
-/// figlet -f "ANSI Regular" hodl > apps/hodl/src/art.txt
+/// figlet -f "ANSI Regular" hodl > crates/hodl-tui/src/splash/art.txt
 /// ```
 const LONG_ABOUT: &str = concat!(
     "\n",
-    include_str!("art.txt"),
+    include_str!("../../../crates/hodl-tui/src/splash/art.txt"),
     "\nLight crypto wallet — TUI · v",
     env!("CARGO_PKG_VERSION"),
 );
@@ -215,8 +217,8 @@ mod cli_tests {
         let mut cmd = Cli::command();
         let help = cmd.render_long_help().to_string();
         assert!(
-            help.contains(include_str!("art.txt")),
-            "long_help missing embedded art.txt block; got:\n{help}"
+            help.contains(hodl_tui::splash::ART),
+            "long_help missing embedded splash art; got:\n{help}"
         );
     }
 

@@ -430,6 +430,7 @@ mod tests {
             tor: TorConfig::default(),
             lock: LockConfig::default(),
             kdf: Default::default(),
+            ui: Default::default(),
         }
     }
 

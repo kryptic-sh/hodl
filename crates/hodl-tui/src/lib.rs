@@ -19,9 +19,10 @@ pub mod retry;
 pub mod scan_cache;
 pub mod send;
 pub mod settings;
+pub mod splash;
 pub mod tofu_overlay;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -30,6 +31,7 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use hodl_config::Config;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
@@ -39,8 +41,9 @@ pub use app::DEFAULT_IDLE_TIMEOUT;
 ///
 /// Idle timeout is read from `Config.lock.idle_timeout_secs` at startup.
 pub fn run(data_root: PathBuf, wallet_name: String) -> Result<()> {
+    let splash_enabled = splash_enabled_from_data_root(&data_root);
     let mut app = app::App::new_unlock(data_root, wallet_name)?;
-    with_terminal(|terminal| app.run(terminal))
+    with_terminal(splash_enabled, |terminal| app.run(terminal))
 }
 
 /// Same as [`run`] but overrides the idle timeout (used in tests).
@@ -49,8 +52,9 @@ pub fn run_with_timeout(
     wallet_name: String,
     idle_timeout: Duration,
 ) -> Result<()> {
+    let splash_enabled = splash_enabled_from_data_root(&data_root);
     let mut app = app::App::new_unlock_with_timeout(data_root, wallet_name, idle_timeout)?;
-    with_terminal(|terminal| app.run(terminal))
+    with_terminal(splash_enabled, |terminal| app.run(terminal))
 }
 
 /// Run the create-wallet onboarding TUI, then drop into the lock screen.
@@ -58,8 +62,9 @@ pub fn run_with_timeout(
 /// If `use_keyring` is `true`, the vault password is stored in the OS keyring
 /// after successful creation. Falls back silently if the keyring is unavailable.
 pub fn run_create(data_root: PathBuf, wallet_name: String, use_keyring: bool) -> Result<()> {
+    let splash_enabled = splash_enabled_from_data_root(&data_root);
     let mut app = app::App::new_create(data_root, wallet_name, use_keyring)?;
-    with_terminal(|terminal| app.run(terminal))
+    with_terminal(splash_enabled, |terminal| app.run(terminal))
 }
 
 /// Run the restore-wallet onboarding TUI, then drop into the lock screen.
@@ -67,8 +72,9 @@ pub fn run_create(data_root: PathBuf, wallet_name: String, use_keyring: bool) ->
 /// If `use_keyring` is `true`, the vault password is stored in the OS keyring
 /// after successful restore. Falls back silently if the keyring is unavailable.
 pub fn run_restore(data_root: PathBuf, wallet_name: String, use_keyring: bool) -> Result<()> {
+    let splash_enabled = splash_enabled_from_data_root(&data_root);
     let mut app = app::App::new_restore(data_root, wallet_name, use_keyring)?;
-    with_terminal(|terminal| app.run(terminal))
+    with_terminal(splash_enabled, |terminal| app.run(terminal))
 }
 
 /// Stub kept for the bin's existing call shape.
@@ -77,7 +83,14 @@ pub fn run_default() -> Result<()> {
     Ok(())
 }
 
-fn with_terminal<F>(f: F) -> Result<()>
+/// Read `[ui] splash` from config. Returns `true` (default-on) if config is
+/// missing or the field is absent.
+fn splash_enabled_from_data_root(data_root: &Path) -> bool {
+    let path = Config::default_path().unwrap_or_else(|_| data_root.join("config.toml"));
+    Config::load(&path).unwrap_or_default().ui.splash
+}
+
+fn with_terminal<F>(splash_enabled: bool, f: F) -> Result<()>
 where
     F: FnOnce(&mut Terminal<CrosstermBackend<std::io::Stdout>>) -> Result<()>,
 {
@@ -95,6 +108,8 @@ where
     // ratatui's diff renderer only repaints changed cells, so prior shell
     // scrollback bleeds through any blank widget background.
     terminal.clear()?;
+
+    splash::run(&mut terminal, splash_enabled)?;
 
     let result = f(&mut terminal);
 

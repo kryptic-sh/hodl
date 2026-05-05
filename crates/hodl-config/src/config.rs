@@ -96,6 +96,19 @@ impl Default for LockConfig {
     }
 }
 
+/// UI behaviour config.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiConfig {
+    /// Show the splash animation at TUI launch. Default: true.
+    pub splash: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        UiConfig { splash: true }
+    }
+}
+
 /// Argon2id parameter preset.
 ///
 /// | Preset   | m (MiB) | t | p |
@@ -142,6 +155,8 @@ pub struct Config {
     pub lock: LockConfig,
     #[serde(default)]
     pub kdf: KdfPreset,
+    #[serde(default)]
+    pub ui: UiConfig,
 }
 
 impl Default for Config {
@@ -151,6 +166,7 @@ impl Default for Config {
             tor: TorConfig::default(),
             lock: LockConfig::default(),
             kdf: KdfPreset::default(),
+            ui: UiConfig::default(),
         }
     }
 }
@@ -528,5 +544,42 @@ decimals = 18
             eth.tokens.is_empty(),
             "tokens should default to empty when not present in TOML"
         );
+    }
+
+    #[test]
+    fn ui_splash_defaults_to_true() {
+        // A config with no [ui] block must still get splash = true.
+        let src = r#""#;
+        let cfg: Config = toml::from_str(src).expect("parse");
+        assert!(cfg.ui.splash, "splash should default to true");
+    }
+
+    #[test]
+    fn ui_splash_false_round_trips() {
+        let src = r#"
+[ui]
+splash = false
+"#;
+        let cfg: Config = toml::from_str(src).expect("parse");
+        assert!(!cfg.ui.splash, "splash should be false when set to false");
+
+        // Round-trip: serialize then deserialize must preserve false.
+        let serialized = toml::to_string_pretty(&cfg).expect("serialize");
+        let back: Config = toml::from_str(&serialized).expect("deserialize");
+        assert!(!back.ui.splash, "splash false must survive round-trip");
+    }
+
+    #[test]
+    fn ui_splash_true_round_trips() {
+        let src = r#"
+[ui]
+splash = true
+"#;
+        let cfg: Config = toml::from_str(src).expect("parse");
+        assert!(cfg.ui.splash, "splash should be true when set to true");
+
+        let serialized = toml::to_string_pretty(&cfg).expect("serialize");
+        let back: Config = toml::from_str(&serialized).expect("deserialize");
+        assert!(back.ui.splash, "splash true must survive round-trip");
     }
 }

@@ -21,6 +21,7 @@ hjkl-form.workspace = true
 hjkl-ratatui.workspace = true
 hjkl-picker.workspace = true
 hjkl-clipboard.workspace = true
+hjkl-splash.workspace = true
 anyhow.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true

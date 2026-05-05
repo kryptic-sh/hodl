@@ -106,6 +106,7 @@ impl SettingsState {
                 idle_timeout_secs: idle_secs,
             },
             kdf,
+            ui: base.ui.clone(),
         }
     }
 

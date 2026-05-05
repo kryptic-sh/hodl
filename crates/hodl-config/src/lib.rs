@@ -9,6 +9,8 @@ mod error;
 mod known_hosts;
 
 pub use address_book::{AddressBook, Contact};
-pub use config::{ChainConfig, Config, Endpoint, KdfPreset, LockConfig, TokenSpec, TorConfig};
+pub use config::{
+    ChainConfig, Config, Endpoint, KdfPreset, LockConfig, TokenSpec, TorConfig, UiConfig,
+};
 pub use error::ConfigError;
 pub use known_hosts::KnownHosts;
