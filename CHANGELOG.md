@@ -8,6 +8,19 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-05-06
+
+### Added
+
+- `hodl keyring remove [name]` now prompts `[y/N]` before deleting the OS
+  keyring entry; pass `-y` / `--yes` to skip. EOF on stdin (piped) is treated as
+  abort. Closes #21.
+- Lock screen renders an "auto-lock in NmNNs" hint below the keybind line. Color
+  shifts to yellow in the final 30 s. Closes #22.
+- Lock screen `1`–`9` keys (Normal mode) jump straight to the Nth wallet in the
+  alphabetical list — same wallets the `w` picker shows, no overlay.
+  Out-of-range slots surface a "no wallet at slot N" hint. Closes #29.
+
 ## [0.7.0] - 2026-05-06
 
 ### Added
@@ -766,7 +779,8 @@ across every backend.
 
 - Workspace scaffold (M0): crates, CI lint/build/test on Linux.
 
-[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/kryptic-sh/hodl/releases/tag/v0.7.1
 [0.7.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.7.0
 [0.6.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.6.0
 [0.5.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.5.0
