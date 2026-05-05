@@ -7,9 +7,13 @@
 pub mod cache;
 pub mod derive;
 pub mod error;
+pub mod keyring;
+pub mod meta;
 pub mod mnemonic;
 pub mod storage;
 pub mod vault;
+
+pub use meta::WalletMeta;
 
 use std::path::{Path, PathBuf};
 

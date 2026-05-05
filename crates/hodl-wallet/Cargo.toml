@@ -21,8 +21,14 @@ hex.workspace = true
 zeroize.workspace = true
 serde = { workspace = true }
 thiserror.workspace = true
+toml.workspace = true
 hjkl-config.workspace = true
+keyring = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
 hex.workspace = true
+
+[features]
+default = []
+keyring = ["dep:keyring"]

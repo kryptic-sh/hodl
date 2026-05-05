@@ -107,12 +107,17 @@ impl App {
         })
     }
 
-    pub fn new_create(data_root: PathBuf, wallet_name: String) -> Result<Self> {
+    pub fn new_create(data_root: PathBuf, wallet_name: String, use_keyring: bool) -> Result<Self> {
         let config = load_config(&data_root);
         let idle_timeout = idle_timeout_from_config(&config);
         let clipboard = ClipboardHandle::new()?;
         let known_hosts = load_known_hosts(&data_root);
-        let ob_state = OnboardingState::new(OnboardingMode::Create, data_root.clone(), wallet_name);
+        let ob_state = OnboardingState::new_with_keyring(
+            OnboardingMode::Create,
+            data_root.clone(),
+            wallet_name,
+            use_keyring,
+        );
         Ok(Self {
             data_root,
             wallet: None,
@@ -129,13 +134,17 @@ impl App {
         })
     }
 
-    pub fn new_restore(data_root: PathBuf, wallet_name: String) -> Result<Self> {
+    pub fn new_restore(data_root: PathBuf, wallet_name: String, use_keyring: bool) -> Result<Self> {
         let config = load_config(&data_root);
         let idle_timeout = idle_timeout_from_config(&config);
         let clipboard = ClipboardHandle::new()?;
         let known_hosts = load_known_hosts(&data_root);
-        let ob_state =
-            OnboardingState::new(OnboardingMode::Restore, data_root.clone(), wallet_name);
+        let ob_state = OnboardingState::new_with_keyring(
+            OnboardingMode::Restore,
+            data_root.clone(),
+            wallet_name,
+            use_keyring,
+        );
         Ok(Self {
             data_root,
             wallet: None,

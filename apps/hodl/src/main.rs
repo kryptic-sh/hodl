@@ -10,6 +10,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use hodl_wallet::storage;
+use hodl_wallet::{WalletMeta, keyring as wallet_keyring};
 
 /// ASCII-art banner. Regenerate with:
 ///
@@ -46,6 +47,12 @@ enum Cmd {
         /// Wallet name (vault file is `<name>.vault`).
         #[arg(default_value = "default")]
         name: String,
+        /// Store the vault password in the OS keyring on creation so
+        /// subsequent launches skip the password prompt. Falls back to
+        /// prompt if the keyring is unavailable. Note: the keyring entry
+        /// is a bearer credential — do not use on shared machines.
+        #[arg(long)]
+        keyring: bool,
     },
 
     /// Restore a wallet from an existing BIP-39 mnemonic (modal TUI).
@@ -53,10 +60,33 @@ enum Cmd {
         /// Wallet name.
         #[arg(default_value = "default")]
         name: String,
+        /// Store the vault password in the OS keyring after restore so
+        /// subsequent launches skip the password prompt. Falls back to
+        /// prompt if the keyring is unavailable.
+        #[arg(long)]
+        keyring: bool,
     },
 
     /// Open the lock screen for an existing wallet.
     Unlock {
+        /// Wallet name.
+        #[arg(default_value = "default")]
+        name: String,
+    },
+
+    /// Manage the OS keyring entry for a wallet's vault password.
+    Keyring {
+        #[command(subcommand)]
+        sub: KeyringSub,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum KeyringSub {
+    /// Remove the keyring entry for this wallet and disable keyring
+    /// auto-unlock in its metadata. Subsequent launches will prompt
+    /// for the vault password as normal.
+    Remove {
         /// Wallet name.
         #[arg(default_value = "default")]
         name: String,
@@ -75,17 +105,39 @@ fn main() -> Result<()> {
     match cli.cmd.unwrap_or(Cmd::Unlock {
         name: "default".into(),
     }) {
-        Cmd::Init { name } => hodl_tui::run_create(data_root, name),
-        Cmd::Restore { name } => hodl_tui::run_restore(data_root, name),
+        Cmd::Init { name, keyring } => hodl_tui::run_create(data_root, name, keyring),
+        Cmd::Restore { name, keyring } => hodl_tui::run_restore(data_root, name, keyring),
         Cmd::Unlock { name } => {
             // First-run convenience: bare `hodl` with no vault routes to
             // onboarding instead of failing with "vault not found".
             if !storage::vault_path(&data_root, &name).exists() {
-                hodl_tui::run_create(data_root, name)
+                hodl_tui::run_create(data_root, name, false)
             } else {
                 hodl_tui::run(data_root, name)
             }
         }
+        Cmd::Keyring { sub } => match sub {
+            KeyringSub::Remove { name } => {
+                // Delete the OS keyring entry (idempotent — missing entry = ok).
+                if let Err(e) = wallet_keyring::delete_password(&name) {
+                    eprintln!("warning: could not remove keyring entry: {e}");
+                }
+                // Flip keyring = false in the meta file.
+                match WalletMeta::load(&data_root, &name) {
+                    Ok(mut meta) => {
+                        meta.keyring = false;
+                        if let Err(e) = meta.save(&data_root, &name) {
+                            eprintln!("warning: could not update wallet meta: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("warning: could not load wallet meta: {e}");
+                    }
+                }
+                println!("removed keyring entry for \"{name}\"");
+                Ok(())
+            }
+        },
     }
 }
 

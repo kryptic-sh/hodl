@@ -42,7 +42,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use zeroize::Zeroize;
 
-use hodl_wallet::{UnlockedWallet, Wallet, storage::list_wallets};
+use hodl_wallet::keyring as wallet_keyring;
+use hodl_wallet::{UnlockedWallet, Wallet, WalletMeta, storage::list_wallets};
 
 use crate::help::{HelpAction, HelpOverlay};
 
@@ -69,16 +70,57 @@ where
     let mut state = LockState::new();
     let mut help_overlay: Option<HelpOverlay> = None;
 
+    // ── Keyring auto-unlock ───────────────────────────────────────────────
+    // Attempt before entering the main loop so the user never sees the
+    // password prompt if the keyring entry is present and valid.
+    let meta = WalletMeta::load(data_root, &wallet.name).unwrap_or_default();
+    if meta.keyring
+        && let Ok(Some(pw_str)) = wallet_keyring::load_password(&wallet.name)
+    {
+        let mut pw_bytes = pw_str.into_bytes();
+        let unlock_result = wallet.unlock(&pw_bytes);
+        pw_bytes.zeroize();
+        if let Ok(unlocked) = unlock_result {
+            return Ok(Outcome::Unlocked(unlocked));
+        }
+        // Stale entry (password changed out-of-band) — fall through to
+        // the manual prompt. Leave the stale entry alone; user can run
+        // `hodl keyring remove` to clear it.
+        tracing::warn!(
+            wallet = %wallet.name,
+            "keyring auto-unlock failed (stale entry?); falling back to password prompt"
+        );
+    }
+
     loop {
         // ── Poll pending unlock ───────────────────────────────────────────
         if let Some(rx) = &state.pending_unlock {
             match rx.try_recv() {
                 Ok(Ok(unlocked)) => {
                     state.pending_unlock = None;
+                    // Self-recovery: if keyring is enabled but the auto-unlock
+                    // didn't fire (entry was missing/wiped), re-store now.
+                    if meta.keyring {
+                        if let Some(mut pw) = state.pending_unlock_pw.take() {
+                            if let Err(e) = wallet_keyring::store_password(&wallet.name, &pw) {
+                                tracing::warn!("keyring self-recovery store failed: {e}");
+                            }
+                            pw.zeroize();
+                        }
+                    } else {
+                        // Not using keyring — zeroize regardless.
+                        if let Some(mut pw) = state.pending_unlock_pw.take() {
+                            pw.zeroize();
+                        }
+                    }
                     return Ok(Outcome::Unlocked(unlocked));
                 }
                 Ok(Err(e)) => {
                     state.pending_unlock = None;
+                    // Zeroize the saved pw on unlock failure too.
+                    if let Some(mut pw) = state.pending_unlock_pw.take() {
+                        pw.zeroize();
+                    }
                     state.message = Some((format!("{e}"), MessageKind::Error));
                 }
                 Err(mpsc::TryRecvError::Empty) => {
@@ -86,6 +128,9 @@ where
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     state.pending_unlock = None;
+                    if let Some(mut pw) = state.pending_unlock_pw.take() {
+                        pw.zeroize();
+                    }
                     state.message = Some((
                         "unlock thread panicked — try again".into(),
                         MessageKind::Error,
@@ -176,6 +221,11 @@ pub(crate) struct LockState {
     /// All key input is ignored while this is `Some` because the KDF is
     /// uninterruptible — accepting more input would only queue a race.
     pending_unlock: Option<Receiver<Result<UnlockedWallet>>>,
+    /// Password bytes for the in-flight unlock attempt. Used by the keyring
+    /// self-recovery path: if `meta.keyring` is true but the auto-unlock
+    /// didn't fire (entry was wiped), we re-store after manual success.
+    /// Zeroized on every exit path (success, error, drop).
+    pending_unlock_pw: Option<Vec<u8>>,
 }
 
 fn make_password_form() -> Form {
@@ -193,6 +243,7 @@ impl LockState {
             last_activity: Instant::now(),
             picker: None,
             pending_unlock: None,
+            pending_unlock_pw: None,
         }
     }
 
@@ -218,6 +269,11 @@ impl LockState {
         };
         let pw_bytes: Vec<u8> = pw_text.into_bytes();
         self.wipe_field();
+
+        // Keep a copy for keyring self-recovery: if meta.keyring is true but
+        // the auto-unlock didn't fire (entry wiped), re-store after success.
+        // Zeroized in the poll arm (success) and on drop (error / quit).
+        self.pending_unlock_pw = Some(pw_bytes.clone());
 
         // Clone the Wallet handle — it only holds a name + PathBuf, no secrets.
         let wallet_clone = wallet.clone();
@@ -272,6 +328,9 @@ impl LockState {
 impl Drop for LockState {
     fn drop(&mut self) {
         self.wipe_field();
+        if let Some(mut pw) = self.pending_unlock_pw.take() {
+            pw.zeroize();
+        }
     }
 }
 

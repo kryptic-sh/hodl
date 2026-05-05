@@ -22,6 +22,8 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use zeroize::Zeroize;
 
 use hodl_wallet::Wallet;
+use hodl_wallet::WalletMeta;
+use hodl_wallet::keyring as wallet_keyring;
 use hodl_wallet::mnemonic::{self, WordCount};
 use hodl_wallet::vault::KdfParams;
 
@@ -165,10 +167,21 @@ pub struct OnboardingState {
     message: Option<(String, bool)>, // (text, is_error)
     data_root: PathBuf,
     wallet_name: String,
+    /// Whether to store the vault password in the OS keyring after creation.
+    use_keyring: bool,
 }
 
 impl OnboardingState {
     pub fn new(mode: OnboardingMode, data_root: PathBuf, wallet_name: String) -> Self {
+        Self::new_with_keyring(mode, data_root, wallet_name, false)
+    }
+
+    pub fn new_with_keyring(
+        mode: OnboardingMode,
+        data_root: PathBuf,
+        wallet_name: String,
+        use_keyring: bool,
+    ) -> Self {
         let form = match mode {
             OnboardingMode::Create => make_create_form(),
             OnboardingMode::Restore => make_restore_form(),
@@ -180,6 +193,7 @@ impl OnboardingState {
             message: None,
             data_root,
             wallet_name,
+            use_keyring,
         }
     }
 
@@ -295,6 +309,18 @@ impl OnboardingState {
             KdfParams::default(),
         );
 
+        // Store keyring + meta BEFORE zeroizing pw.
+        if result.is_ok() && self.use_keyring {
+            if let Err(e) = wallet_keyring::store_password(&self.wallet_name, pw.as_bytes()) {
+                tracing::warn!("keyring store failed (non-fatal): {e}");
+            } else {
+                let meta = WalletMeta { keyring: true };
+                if let Err(e) = meta.save(&self.data_root, &self.wallet_name) {
+                    tracing::warn!("meta save failed (non-fatal): {e}");
+                }
+            }
+        }
+
         passphrase.zeroize();
         pw.zeroize();
         self.wipe_sensitive_fields_create();
@@ -339,6 +365,18 @@ impl OnboardingState {
             pw.as_bytes(),
             KdfParams::default(),
         );
+
+        // Store keyring + meta BEFORE zeroizing pw.
+        if result.is_ok() && self.use_keyring {
+            if let Err(e) = wallet_keyring::store_password(&self.wallet_name, pw.as_bytes()) {
+                tracing::warn!("keyring store failed (non-fatal): {e}");
+            } else {
+                let meta = WalletMeta { keyring: true };
+                if let Err(e) = meta.save(&self.data_root, &self.wallet_name) {
+                    tracing::warn!("meta save failed (non-fatal): {e}");
+                }
+            }
+        }
 
         passphrase.zeroize();
         pw.zeroize();

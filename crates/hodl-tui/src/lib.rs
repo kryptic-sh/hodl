@@ -54,14 +54,20 @@ pub fn run_with_timeout(
 }
 
 /// Run the create-wallet onboarding TUI, then drop into the lock screen.
-pub fn run_create(data_root: PathBuf, wallet_name: String) -> Result<()> {
-    let mut app = app::App::new_create(data_root, wallet_name)?;
+///
+/// If `use_keyring` is `true`, the vault password is stored in the OS keyring
+/// after successful creation. Falls back silently if the keyring is unavailable.
+pub fn run_create(data_root: PathBuf, wallet_name: String, use_keyring: bool) -> Result<()> {
+    let mut app = app::App::new_create(data_root, wallet_name, use_keyring)?;
     with_terminal(|terminal| app.run(terminal))
 }
 
 /// Run the restore-wallet onboarding TUI, then drop into the lock screen.
-pub fn run_restore(data_root: PathBuf, wallet_name: String) -> Result<()> {
-    let mut app = app::App::new_restore(data_root, wallet_name)?;
+///
+/// If `use_keyring` is `true`, the vault password is stored in the OS keyring
+/// after successful restore. Falls back silently if the keyring is unavailable.
+pub fn run_restore(data_root: PathBuf, wallet_name: String, use_keyring: bool) -> Result<()> {
+    let mut app = app::App::new_restore(data_root, wallet_name, use_keyring)?;
     with_terminal(|terminal| app.run(terminal))
 }
 
