@@ -176,6 +176,30 @@ impl EthRpcClient {
     pub fn eth_get_transaction_receipt(&self, hash: &str) -> Result<Value> {
         self.call("eth_getTransactionReceipt", json!([hash]))
     }
+
+    /// Generic `eth_call` to a contract.
+    ///
+    /// `to` is the `0x…` contract address; `data` is the hex-encoded calldata
+    /// (with or without the `0x` prefix — both are accepted and normalised).
+    /// Block tag is hardcoded to `"latest"`. Returns the raw response payload
+    /// decoded from the `0x…` hex string returned by the node.
+    pub fn eth_call(&self, to: &str, data: &str) -> Result<Vec<u8>> {
+        let data_hex = if data.starts_with("0x") || data.starts_with("0X") {
+            data.to_string()
+        } else {
+            format!("0x{data}")
+        };
+        let v = self.call(
+            "eth_call",
+            json!([{ "to": to, "data": data_hex }, "latest"]),
+        )?;
+        let s = v
+            .as_str()
+            .ok_or_else(|| Error::Network(format!("eth_call: expected hex string, got {v}")))?;
+        let stripped = s.strip_prefix("0x").unwrap_or(s);
+        hex::decode(stripped)
+            .map_err(|e| Error::Network(format!("eth_call: hex decode failed: {e}")))
+    }
 }
 
 #[cfg(test)]
@@ -220,5 +244,27 @@ mod tests {
         let resp = format!(r#"{{"jsonrpc":"2.0","id":1,"result":"{hash}"}}"#);
         let client = mock_client(&resp);
         assert_eq!(client.eth_send_raw_transaction("0xdeadbeef").unwrap(), hash);
+    }
+
+    #[test]
+    fn eth_call_decodes_hex_response() {
+        // Simulate a balanceOf response: 0x000…000001 (= 1 token unit)
+        let padded = format!("0x{:0>64}", "1");
+        let resp = format!(r#"{{"jsonrpc":"2.0","id":1,"result":"{padded}"}}"#);
+        let client = mock_client(&resp);
+        let bytes = client.eth_call("0xcontract", "0x70a08231deadbeef").unwrap();
+        assert_eq!(bytes.len(), 32);
+        // Last byte should be 1.
+        assert_eq!(bytes[31], 1u8);
+    }
+
+    #[test]
+    fn eth_call_accepts_data_without_0x_prefix() {
+        let padded = format!("0x{:0>64}", "ff");
+        let resp = format!(r#"{{"jsonrpc":"2.0","id":1,"result":"{padded}"}}"#);
+        let client = mock_client(&resp);
+        // data supplied without 0x prefix — must not error.
+        let bytes = client.eth_call("0xcontract", "70a08231deadbeef").unwrap();
+        assert_eq!(bytes[31], 0xffu8);
     }
 }

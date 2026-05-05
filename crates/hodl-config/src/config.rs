@@ -18,6 +18,27 @@ pub enum Endpoint {
     Lws { url: String },
 }
 
+/// ERC-20 / BEP-20 token specification for per-chain balance reads.
+///
+/// Configure under `[[chains.ethereum.tokens]]` or
+/// `[[chains.bsc_mainnet.tokens]]` in `~/.config/hodl/config.toml`.
+///
+/// ```toml
+/// [[chains.ethereum.tokens]]
+/// address  = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+/// symbol   = "USDC"
+/// decimals = 6
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenSpec {
+    /// Lower-case `0x…` 40-hex-char contract address.
+    pub address: String,
+    /// Display symbol (e.g. "USDC", "USDT", "DAI").
+    pub symbol: String,
+    /// Decimal places (USDC=6, DAI=18, etc.).
+    pub decimals: u8,
+}
+
 /// Per-chain configuration.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChainConfig {
@@ -25,6 +46,10 @@ pub struct ChainConfig {
     pub endpoints: Vec<Endpoint>,
     #[serde(default = "default_gap_limit")]
     pub gap_limit: u32,
+    /// ERC-20 / BEP-20 token contracts to track. Defaults to empty (no tokens).
+    /// Absent key in TOML deserialises as empty vec — existing configs are unaffected.
+    #[serde(default)]
+    pub tokens: Vec<TokenSpec>,
 }
 
 impl Default for ChainConfig {
@@ -32,6 +57,7 @@ impl Default for ChainConfig {
         ChainConfig {
             endpoints: Vec::new(),
             gap_limit: default_gap_limit(),
+            tokens: Vec::new(),
         }
     }
 }
@@ -138,6 +164,7 @@ fn default_chains() -> HashMap<ChainId, ChainConfig> {
         ChainConfig {
             endpoints,
             gap_limit: default_gap_limit(),
+            tokens: Vec::new(),
         }
     }
     fn ssl(host: &str, port: u16) -> Endpoint {
@@ -449,6 +476,53 @@ gap_limit = 10
         assert!(
             msg.contains("not-a-real-chain") || msg.contains("unknown"),
             "error message should mention the bad key: {msg}"
+        );
+    }
+
+    #[test]
+    fn token_spec_round_trips_with_tokens_array() {
+        let src = r#"
+[chains.ethereum]
+
+[[chains.ethereum.tokens]]
+address  = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+symbol   = "USDC"
+decimals = 6
+
+[[chains.ethereum.tokens]]
+address  = "0x6b175474e89094c44da98b954eedeac495271d0f"
+symbol   = "DAI"
+decimals = 18
+"#;
+        let cfg: Config = toml::from_str(src).expect("parse");
+        let eth = cfg.chains.get(&ChainId::Ethereum).expect("ethereum chain");
+        assert_eq!(eth.tokens.len(), 2);
+        assert_eq!(eth.tokens[0].symbol, "USDC");
+        assert_eq!(eth.tokens[0].decimals, 6);
+        assert_eq!(
+            eth.tokens[0].address,
+            "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        );
+        assert_eq!(eth.tokens[1].symbol, "DAI");
+        assert_eq!(eth.tokens[1].decimals, 18);
+
+        // Round-trip: serialize then deserialize must be equal.
+        let serialized = toml::to_string_pretty(&cfg).expect("serialize");
+        let back: Config = toml::from_str(&serialized).expect("deserialize");
+        assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn token_spec_defaults_to_empty_when_absent() {
+        // Configs with no tokens key must deserialize with an empty tokens vec.
+        let src = r#"
+[chains.ethereum]
+"#;
+        let cfg: Config = toml::from_str(src).expect("parse");
+        let eth = cfg.chains.get(&ChainId::Ethereum).expect("ethereum chain");
+        assert!(
+            eth.tokens.is_empty(),
+            "tokens should default to empty when not present in TOML"
         );
     }
 }

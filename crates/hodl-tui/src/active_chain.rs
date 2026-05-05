@@ -8,14 +8,16 @@ use hodl_chain_bitcoin::electrum::{ElectrumClient, Utxo};
 use hodl_chain_bitcoin::{BitcoinChain, InputHint, NetworkParams as BtcNetworkParams};
 use hodl_chain_ethereum::{EthRpcClient, EthereumChain, NetworkParams as EthNetworkParams};
 use hodl_chain_monero::{LwsClient, MoneroChain, NetworkParams as XmrNetworkParams};
-use hodl_config::{Config, Endpoint, KnownHosts};
+use hodl_config::{Config, Endpoint, KnownHosts, TokenSpec};
 use hodl_core::error::{Error, Result};
 use hodl_core::{Address, Amount, Chain, ChainId, FeeRate, SendParams, SignedTx, TxId, UnsignedTx};
 use rand::seq::SliceRandom;
 
 pub enum ActiveChain {
     Bitcoin(BitcoinChain),
-    Ethereum(EthereumChain),
+    /// EVM chain (Ethereum or BSC). Carries the chain impl and the per-chain
+    /// token list read from config so `token_balances` needs no extra args.
+    Ethereum(EthereumChain, Vec<TokenSpec>),
     Monero(MoneroChain),
 }
 
@@ -79,6 +81,7 @@ impl ActiveChain {
             ChainId::Ethereum | ChainId::BscMainnet => {
                 let params = eth_network_params(id);
                 let chain_cfg = config.chains.get(&id).cloned().unwrap_or_default();
+                let tokens = chain_cfg.tokens.clone();
                 let endpoints: Vec<&Endpoint> = chain_cfg
                     .endpoints
                     .iter()
@@ -94,7 +97,10 @@ impl ActiveChain {
                         None => Ok(EthRpcClient::new(url)),
                     }
                 })?;
-                Ok(ActiveChain::Ethereum(EthereumChain::new(params, rpc)))
+                Ok(ActiveChain::Ethereum(
+                    EthereumChain::new(params, rpc),
+                    tokens,
+                ))
             }
             ChainId::Monero => {
                 let chain_cfg = config.chains.get(&id).cloned().unwrap_or_default();
@@ -122,7 +128,7 @@ impl ActiveChain {
     pub fn chain_id(&self) -> ChainId {
         match self {
             ActiveChain::Bitcoin(c) => c.id(),
-            ActiveChain::Ethereum(c) => c.id(),
+            ActiveChain::Ethereum(c, _) => c.id(),
             ActiveChain::Monero(c) => c.id(),
         }
     }
@@ -134,7 +140,7 @@ impl ActiveChain {
         let coin = self.chain_id().slip44();
         let purpose = match self {
             ActiveChain::Bitcoin(c) => c.purpose().number(),
-            ActiveChain::Ethereum(_) | ActiveChain::Monero(_) => 44,
+            ActiveChain::Ethereum(_, _) | ActiveChain::Monero(_) => 44,
         };
         format!("m/{purpose}'/{coin}'/{account}'/0/{index}")
     }
@@ -142,7 +148,7 @@ impl ActiveChain {
     pub fn derive(&self, seed: &[u8; 64], account: u32, index: u32) -> Result<Address> {
         match self {
             ActiveChain::Bitcoin(c) => c.derive(seed, account, index),
-            ActiveChain::Ethereum(c) => c.derive(seed, account, index),
+            ActiveChain::Ethereum(c, _) => c.derive(seed, account, index),
             ActiveChain::Monero(c) => c.derive(seed, account, index),
         }
     }
@@ -150,15 +156,25 @@ impl ActiveChain {
     pub fn balance(&self, addr: &Address) -> Result<Amount> {
         match self {
             ActiveChain::Bitcoin(c) => c.balance(addr),
-            ActiveChain::Ethereum(c) => c.balance(addr),
+            ActiveChain::Ethereum(c, _) => c.balance(addr),
             ActiveChain::Monero(c) => c.balance(addr),
+        }
+    }
+
+    /// Read ERC-20/BEP-20 token balances for the given address using the
+    /// token list from the chain's config. Serial RPC calls — no parallelism.
+    /// Returns an empty vec for non-EVM chains.
+    pub fn token_balances(&self, addr: &Address) -> Vec<(TokenSpec, Result<u128>)> {
+        match self {
+            ActiveChain::Ethereum(c, tokens) => c.token_balances(addr, tokens),
+            ActiveChain::Bitcoin(_) | ActiveChain::Monero(_) => Vec::new(),
         }
     }
 
     pub fn estimate_fee(&self, target_blocks: u32) -> Result<FeeRate> {
         match self {
             ActiveChain::Bitcoin(c) => c.estimate_fee(target_blocks),
-            ActiveChain::Ethereum(c) => c.estimate_fee(target_blocks),
+            ActiveChain::Ethereum(c, _) => c.estimate_fee(target_blocks),
             ActiveChain::Monero(c) => c.estimate_fee(target_blocks),
         }
     }
@@ -181,7 +197,7 @@ impl ActiveChain {
                     rbf: opts.rbf,
                 })
             }
-            ActiveChain::Ethereum(c) => {
+            ActiveChain::Ethereum(c, _) => {
                 let unsigned = c.build_tx(params.clone())?;
                 Ok(PreparedSend::Ethereum { unsigned })
             }
@@ -223,7 +239,7 @@ impl ActiveChain {
                     rbf,
                 },
             ) => c.sign_multi_source(seed, account, params, rbf, &hints, &utxos, change_sats),
-            (ActiveChain::Ethereum(c), PreparedSend::Ethereum { unsigned }) => {
+            (ActiveChain::Ethereum(c, _), PreparedSend::Ethereum { unsigned }) => {
                 let key = c.derive_private_key(seed, account, 0, 0)?;
                 c.sign(unsigned, &key)
             }
@@ -238,7 +254,7 @@ impl ActiveChain {
     pub fn broadcast_only(&self, signed: SignedTx) -> Result<TxId> {
         match self {
             ActiveChain::Bitcoin(c) => c.broadcast(signed),
-            ActiveChain::Ethereum(c) => c.broadcast(signed),
+            ActiveChain::Ethereum(c, _) => c.broadcast(signed),
             ActiveChain::Monero(_) => Err(Error::Chain(
                 "broadcast not implemented for Monero (LWS path)".into(),
             )),
@@ -406,6 +422,7 @@ mod tests {
             ChainConfig {
                 endpoints: vec![endpoint],
                 gap_limit: 20,
+                tokens: Vec::new(),
             },
         );
         Config {
@@ -464,7 +481,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let result = ActiveChain::from_chain_id(ChainId::Ethereum, &cfg, &kh, tmp.path());
         assert!(
-            matches!(result, Ok(ActiveChain::Ethereum(_))),
+            matches!(result, Ok(ActiveChain::Ethereum(_, _))),
             "expected Ok(Ethereum)"
         );
     }

@@ -1,3 +1,4 @@
+use hodl_config::TokenSpec;
 use hodl_core::error::{Error, Result};
 use hodl_core::{
     Address, Amount, Chain, ChainId, FeeRate, PrivateKeyBytes, SendParams, SignedTx, TxId, TxRef,
@@ -6,6 +7,7 @@ use hodl_core::{
 
 use crate::address as eth_address;
 use crate::derive;
+use crate::erc20;
 use crate::network::NetworkParams;
 use crate::rpc::EthRpcClient;
 use crate::tx::{Eip1559Tx, sign};
@@ -19,6 +21,33 @@ pub struct EthereumChain {
 impl EthereumChain {
     pub fn new(params: NetworkParams, rpc: EthRpcClient) -> Self {
         Self { params, rpc }
+    }
+
+    /// Read ERC-20 `balanceOf` for `holder` against each supplied token contract.
+    ///
+    /// Serial — one RPC call per token. RPC providers (Infura free tier, etc.)
+    /// commonly throttle parallel calls; serial keeps failure modes predictable.
+    ///
+    /// Per-token errors are returned as `Err(...)` for that entry but do not
+    /// abort the batch. Callers decide whether to skip / display / retry.
+    pub fn token_balances(
+        &self,
+        holder: &Address,
+        tokens: &[TokenSpec],
+    ) -> Vec<(TokenSpec, Result<u128>)> {
+        tokens
+            .iter()
+            .map(|token| {
+                let result = erc20::encode_balance_of(holder.as_str())
+                    .map_err(|e| Error::Chain(format!("encode balanceOf: {e}")))
+                    .and_then(|calldata| self.rpc.eth_call(&token.address, &calldata))
+                    .and_then(|bytes| {
+                        erc20::decode_uint256_to_u128(&bytes)
+                            .map_err(|e| Error::Chain(format!("decode balanceOf: {e}")))
+                    });
+                (token.clone(), result)
+            })
+            .collect()
     }
 }
 

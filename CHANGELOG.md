@@ -8,6 +8,22 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- ERC-20 token balance reads on Ethereum + BSC summary cards. Configure via
+  `[chains.ethereum.tokens]` (or `[chains.bsc_mainnet.tokens]`) in
+  `~/.config/hodl/config.toml`:
+
+      [[chains.ethereum.tokens]]
+      address = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+      symbol = "USDC"
+      decimals = 6
+
+  Each tagged token's `balanceOf(holder)` is read via `eth_call` against the
+  configured RPC and rendered as an additional row under the native balance.
+  Per-token failures surface inline rather than aborting the whole scan. Closes
+  #9.
+
 ## [0.4.0] - 2026-05-05
 
 ### Added

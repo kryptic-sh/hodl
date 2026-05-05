@@ -38,7 +38,7 @@ use std::thread::JoinHandle;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_picker::{PickerAction, PickerEvent, PickerLogic};
 use hodl_chain_bitcoin::{UsedAddress, WalletScan};
-use hodl_config::{Config, KnownHosts};
+use hodl_config::{Config, KnownHosts, TokenSpec};
 use hodl_core::{Address, Chain, ChainId};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -54,12 +54,33 @@ use crate::active_chain::ActiveChain;
 use crate::format;
 use crate::tofu_overlay::TofuMismatchInfo;
 
+/// A resolved (or failed) ERC-20 / BEP-20 token balance row.
+#[derive(Clone, Debug)]
+pub struct TokenRow {
+    pub symbol: String,
+    pub decimals: u8,
+    /// `Ok(atoms)` on successful `balanceOf` read; `Err(msg)` on failure.
+    pub balance: std::result::Result<u128, String>,
+}
+
+impl TokenRow {
+    fn from_spec_result(spec: &TokenSpec, result: hodl_core::error::Result<u128>) -> Self {
+        TokenRow {
+            symbol: spec.symbol.clone(),
+            decimals: spec.decimals,
+            balance: result.map_err(|e| e.to_string()),
+        }
+    }
+}
+
 /// Events sent from the scan worker thread to the UI.
 enum ScanEvent {
     /// New used address discovered. Append to partial_scan and bump running total.
     Used(UsedAddress),
     /// Scan finished. Final WalletScan replaces the partial accumulator.
     Done(WalletScan),
+    /// Token balances resolved (EVM only). Replaces the token_rows in state.
+    Tokens(Vec<TokenRow>),
     /// Scan errored. Surface via scan_error; clear pending.
     Error(String),
     /// Mid-scan network failure — UI should clear `partial_scan` so the
@@ -151,6 +172,10 @@ pub struct AccountState {
     /// Set when a scan worker sends `ScanEvent::TofuMismatch`. The App layer
     /// reads and clears this on each poll cycle to open the remediation overlay.
     pub tofu_mismatch: Option<TofuMismatchInfo>,
+    /// ERC-20 / BEP-20 token balance rows for EVM chains. Populated by
+    /// `ScanEvent::Tokens` after the native balance scan completes. Empty for
+    /// non-EVM chains or when no tokens are configured.
+    pub token_rows: Vec<TokenRow>,
 }
 
 impl AccountState {
@@ -170,6 +195,7 @@ impl AccountState {
             known_hosts,
             data_root,
             tofu_mismatch: None,
+            token_rows: Vec::new(),
         }
     }
 
@@ -215,6 +241,10 @@ impl AccountState {
                     self.pending_scan = None;
                     return true;
                 }
+                Ok(ScanEvent::Tokens(rows)) => {
+                    self.token_rows = rows;
+                    changed = true;
+                }
                 Ok(ScanEvent::Error(msg)) => {
                     self.scan_error = Some(msg);
                     self.scan = None;
@@ -242,6 +272,7 @@ impl AccountState {
                     // different Electrum server. Drop the partial state from
                     // the previous attempt; the retry rebuilds from scratch.
                     self.partial_scan = WalletScan::default();
+                    self.token_rows = Vec::new();
                     self.scan_attempt = attempt;
                     changed = true;
                 }
@@ -284,6 +315,7 @@ impl AccountState {
         self.scan_error = None;
         self.completed_scan = None;
         self.partial_scan = WalletScan::default();
+        self.token_rows = Vec::new();
         self.scan_attempt = 1;
         self.flash = None;
 
@@ -589,13 +621,31 @@ fn run_scan_attempt(
                 Err(e) => retry::classify(chain, "scan", e),
             }
         }
-        ActiveChain::Ethereum(eth_chain) => single_address_scan(chain, tx, || {
-            let addr = eth_chain
-                .derive(seed, account, 0)
-                .map_err(|e| (e, "derive"))?;
-            let amount = eth_chain.balance(&addr).map_err(|e| (e, "balance"))?;
-            Ok((addr.as_str().to_string(), amount.atoms() as u64))
-        }),
+        ActiveChain::Ethereum(eth_chain, tokens) => {
+            let result = single_address_scan(chain, tx, || {
+                let addr = eth_chain
+                    .derive(seed, account, 0)
+                    .map_err(|e| (e, "derive"))?;
+                let amount = eth_chain.balance(&addr).map_err(|e| (e, "balance"))?;
+                Ok((addr.as_str().to_string(), amount.atoms() as u64))
+            });
+            // After native balance scan, fetch token balances if any tokens
+            // are configured. Errors are per-token and never abort the batch.
+            if !tokens.is_empty() {
+                // Re-derive the address to pass to token_balances.
+                // If derive fails here we skip token reads silently (native
+                // balance already surfaced the error via single_address_scan).
+                if let Ok(addr) = eth_chain.derive(seed, account, 0) {
+                    let raw = eth_chain.token_balances(&addr, &tokens);
+                    let rows: Vec<TokenRow> = raw
+                        .into_iter()
+                        .map(|(spec, res)| TokenRow::from_spec_result(&spec, res))
+                        .collect();
+                    let _ = tx.send(ScanEvent::Tokens(rows));
+                }
+            }
+            result
+        }
         ActiveChain::Monero(xmr_chain) => single_address_scan(chain, tx, || {
             let addr = xmr_chain
                 .derive(seed, account, 0)
@@ -738,7 +788,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
         } else {
             Span::raw("")
         };
-        vec![
+        let mut lines = vec![
             Line::from(""),
             Line::from(vec![
                 Span::raw(format!("   confirmed:    {confirmed}")),
@@ -752,22 +802,37 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
                 Span::raw(format!("   total:        {total}")),
                 suffix.clone(),
             ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::raw(format!("   used addresses:  {used_count}")),
-                suffix,
-            ]),
-            Line::from(format!("   gap limit:       {gap_limit}")),
-            Line::from(""),
-            Line::from(Span::styled(
-                "   r receive · s send · b book · S settings",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(Span::styled(
-                "   p picker · d addresses · R resync · q lock · ? help",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ]
+        ];
+        // ERC-20 / BEP-20 token rows (EVM chains only).
+        for row in &state.token_rows {
+            let line = match &row.balance {
+                Ok(atoms) => {
+                    let formatted = format::format_token(*atoms, row.decimals, &row.symbol);
+                    Line::from(Span::raw(format!("   token:        {formatted}")))
+                }
+                Err(msg) => Line::from(Span::styled(
+                    format!("   err:          {} — {}", row.symbol, msg),
+                    Style::default().fg(Color::DarkGray),
+                )),
+            };
+            lines.push(line);
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::raw(format!("   used addresses:  {used_count}")),
+            suffix,
+        ]));
+        lines.push(Line::from(format!("   gap limit:       {gap_limit}")));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "   r receive · s send · b book · S settings",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "   p picker · d addresses · R resync · q lock · ? help",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines
     } else {
         // No scan, no error, not scanning — initial placeholder.
         vec![
