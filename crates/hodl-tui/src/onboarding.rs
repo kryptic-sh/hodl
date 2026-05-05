@@ -10,7 +10,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use hjkl_form::{
-    Field, FieldMeta, Form, FormMode, Input, SelectField, SubmitField, TextFieldEditor, Validator,
+    CheckboxField, Field, FieldMeta, Form, FormMode, Input, SelectField, SubmitField,
+    TextFieldEditor, Validator,
 };
 use hjkl_ratatui::form::{FormPalette, draw_form};
 use ratatui::Terminal;
@@ -49,6 +50,7 @@ pub enum OnboardingMode {
 const CREATE_PASSPHRASE: usize = 1;
 const CREATE_PASSWORD: usize = 2;
 const CREATE_CONFIRM: usize = 3;
+const CREATE_KEYRING: usize = 4;
 
 // ── Field indices for Restore form ─────────────────────────────────────────
 
@@ -56,6 +58,7 @@ const RESTORE_MNEMONIC: usize = 1;
 const RESTORE_PASSPHRASE: usize = 2;
 const RESTORE_PASSWORD: usize = 3;
 const RESTORE_CONFIRM: usize = 4;
+const RESTORE_KEYRING: usize = 5;
 
 // ── Validators ─────────────────────────────────────────────────────────────
 
@@ -100,6 +103,9 @@ fn make_create_form() -> Form {
             FieldMeta::new("confirm password").required(true),
             1,
         )))
+        .with_field(Field::Checkbox(CheckboxField::new(FieldMeta::new(
+            "store password in OS keyring",
+        ))))
         .with_field(Field::Submit(SubmitField::new(FieldMeta::new(
             "Create wallet",
         ))))
@@ -145,6 +151,9 @@ fn make_restore_form() -> Form {
             FieldMeta::new("confirm password").required(true),
             1,
         )))
+        .with_field(Field::Checkbox(CheckboxField::new(FieldMeta::new(
+            "store password in OS keyring",
+        ))))
         .with_field(Field::Submit(SubmitField::new(
             SubmitField::new(FieldMeta::new("Restore wallet")).meta,
         )))
@@ -182,10 +191,22 @@ impl OnboardingState {
         wallet_name: String,
         use_keyring: bool,
     ) -> Self {
-        let form = match mode {
+        let mut form = match mode {
             OnboardingMode::Create => make_create_form(),
             OnboardingMode::Restore => make_restore_form(),
         };
+        // Pre-tick the in-form checkbox when the user passed `--keyring` so
+        // the CLI flag and the TUI toggle stay in sync; the user can still
+        // un-tick it before submitting.
+        if use_keyring {
+            let idx = match mode {
+                OnboardingMode::Create => CREATE_KEYRING,
+                OnboardingMode::Restore => RESTORE_KEYRING,
+            };
+            if let Some(Field::Checkbox(c)) = form.fields.get_mut(idx) {
+                c.value = true;
+            }
+        }
         Self {
             mode,
             form,
@@ -194,6 +215,21 @@ impl OnboardingState {
             data_root,
             wallet_name,
             use_keyring,
+        }
+    }
+
+    /// Read the keyring checkbox value at submit time. The form's checkbox is
+    /// the source of truth — the CLI `--keyring` flag only seeds its initial
+    /// value. Falls back to `self.use_keyring` if the field is missing for any
+    /// reason (defensive — should never happen).
+    fn keyring_requested(&self) -> bool {
+        let idx = match self.mode {
+            OnboardingMode::Create => CREATE_KEYRING,
+            OnboardingMode::Restore => RESTORE_KEYRING,
+        };
+        match self.form.fields.get(idx) {
+            Some(Field::Checkbox(c)) => c.value,
+            _ => self.use_keyring,
         }
     }
 
@@ -310,7 +346,7 @@ impl OnboardingState {
         );
 
         // Store keyring + meta BEFORE zeroizing pw.
-        if result.is_ok() && self.use_keyring {
+        if result.is_ok() && self.keyring_requested() {
             if let Err(e) = wallet_keyring::store_password(&self.wallet_name, pw.as_bytes()) {
                 tracing::warn!("keyring store failed (non-fatal): {e}");
             } else {
@@ -367,7 +403,7 @@ impl OnboardingState {
         );
 
         // Store keyring + meta BEFORE zeroizing pw.
-        if result.is_ok() && self.use_keyring {
+        if result.is_ok() && self.keyring_requested() {
             if let Err(e) = wallet_keyring::store_password(&self.wallet_name, pw.as_bytes()) {
                 tracing::warn!("keyring store failed (non-fatal): {e}");
             } else {
