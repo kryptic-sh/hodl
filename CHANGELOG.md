@@ -8,13 +8,21 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- NAV send no longer attempts a zero-fee broadcast when `blockchain.estimatefee`
+  returns ≤ 0. Defensive fallback to navcoin-js's default of 100 sat/vByte
+  (100,000 sat/kB), with a warn-level trace recording the upstream value. Other
+  Bitcoin-family chains have no canonical fallback and now hard-error rather
+  than silently attempting a zero-fee tx. Closes #4.
+
 ### Added
 
-- EVM (Ethereum + BSC) multi-account scan. Walks `m/44'/60'/N'/0/0` from
-  N=0 until `gap_limit` consecutive empty accounts (matches the BTC family
-  convention, adapted for the EVM single-address-per-account model).
-  Account 0 is always reported. Per-account ERC-20 token balances are
-  fetched and rendered under each non-empty account. Closes #7.
+- EVM (Ethereum + BSC) multi-account scan. Walks `m/44'/60'/N'/0/0` from N=0
+  until `gap_limit` consecutive empty accounts (matches the BTC family
+  convention, adapted for the EVM single-address-per-account model). Account 0
+  is always reported. Per-account ERC-20 token balances are fetched and rendered
+  under each non-empty account. Closes #7.
 
 - ERC-20 token balance reads on Ethereum + BSC summary cards. Configure via
   `[chains.ethereum.tokens]` (or `[chains.bsc_mainnet.tokens]`) in

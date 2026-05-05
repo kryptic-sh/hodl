@@ -23,6 +23,7 @@ bs58 = { workspace = true }
 rustls = { workspace = true }
 socks = { workspace = true }
 k256 = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 hex.workspace = true

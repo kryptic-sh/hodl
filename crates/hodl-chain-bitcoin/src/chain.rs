@@ -802,10 +802,9 @@ impl Chain for BitcoinChain {
 
     fn estimate_fee(&self, target_blocks: u32) -> Result<FeeRate> {
         let btc_per_kb = self.electrum.borrow_mut().estimate_fee(target_blocks)?;
-        // Convert BTC/kB → satoshis/vByte: 1 BTC = 100_000_000 sat, 1 kB = 1000 vB.
-        let sats_per_vbyte = ((btc_per_kb * 1e8) / 1000.0).ceil() as u64;
+        let sats = apply_fee_fallback(btc_per_kb, self.params.chain_id)?;
         Ok(FeeRate::SatsPerVbyte {
-            sats: sats_per_vbyte,
+            sats,
             chain: self.params.chain_id,
         })
     }
@@ -841,6 +840,40 @@ impl Chain for BitcoinChain {
         let xprv = derive_xprv(seed, self.purpose, &self.params, account, change, index)?;
         let key_bytes: [u8; 32] = xprv.private_key().to_bytes().into();
         Ok(PrivateKeyBytes(key_bytes))
+    }
+}
+
+/// Convert a raw `btc_per_kb` value from `blockchain.estimatefee` into
+/// satoshis/vByte, applying a per-chain defensive fallback when the server
+/// returns ≤ 0 (bug, no data, or undefined behaviour).
+///
+/// - **NavCoin**: falls back to 100 sat/vByte (navcoin-js hardcoded default of
+///   100,000 sat/kB).
+/// - **All other chains**: returns `Err` rather than silently broadcasting a
+///   zero-fee transaction.
+fn apply_fee_fallback(btc_per_kb: f64, chain: ChainId) -> Result<u64> {
+    if btc_per_kb > 0.0 {
+        // Convert BTC/kB → satoshis/vByte: 1 BTC = 100_000_000 sat, 1 kB = 1000 vB.
+        Ok(((btc_per_kb * 1e8) / 1000.0).ceil() as u64)
+    } else {
+        // Server returned ≤ 0 (bug, no data, or rejected). Per-chain
+        // defensive fallback or hard error.
+        match chain {
+            ChainId::NavCoin => {
+                // navcoin-js convention: 100_000 sat/kB = 100 sat/vByte.
+                tracing::warn!(
+                    "{}: estimatefee returned {} (≤ 0); falling back to 100 sat/vByte (navcoin-js default)",
+                    chain.display_name(),
+                    btc_per_kb,
+                );
+                Ok(100)
+            }
+            other => Err(Error::Chain(format!(
+                "{}: estimatefee returned {} — no canonical fallback for this chain; refusing zero-fee broadcast",
+                other.display_name(),
+                btc_per_kb,
+            ))),
+        }
     }
 }
 
@@ -1194,6 +1227,42 @@ mod chain_tests {
             scan.total.total(),
             0,
             "well-known empty test seed must have zero total balance"
+        );
+    }
+
+    // ── apply_fee_fallback unit tests ────────────────────────────────────────
+
+    /// NavCoin: server returns 0.0 → defensive fallback of 100 sat/vByte.
+    #[test]
+    fn nav_fee_fallback_on_zero() {
+        let result = apply_fee_fallback(0.0, ChainId::NavCoin).unwrap();
+        assert_eq!(
+            result, 100,
+            "NavCoin zero-fee fallback should be 100 sat/vByte"
+        );
+    }
+
+    /// NavCoin: normal path (0.00001 BTC/kB = 1000 sat/kB = 1 sat/vByte → ceil = 1).
+    /// Use a value that gives 10 sat/vByte: 0.0001 BTC/kB = 10,000 sat/kB = 10 sat/vByte.
+    #[test]
+    fn nav_fee_normal_path() {
+        // 0.0001 BTC/kB × 1e8 / 1000 = 10,000 sat/kB / 1000 = 10 sat/vByte
+        let result = apply_fee_fallback(0.0001, ChainId::NavCoin).unwrap();
+        assert_eq!(result, 10, "0.0001 BTC/kB should yield 10 sat/vByte");
+    }
+
+    /// Non-NavCoin chains: server returns ≤ 0 → hard error, no zero-fee broadcast.
+    #[test]
+    fn non_nav_zero_returns_error() {
+        let err = apply_fee_fallback(0.0, ChainId::Bitcoin).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("estimatefee returned"),
+            "error should mention 'estimatefee returned'; got: {msg}"
+        );
+        assert!(
+            msg.contains("Bitcoin"),
+            "error should contain chain name 'Bitcoin'; got: {msg}"
         );
     }
 }
