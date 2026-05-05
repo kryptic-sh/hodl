@@ -32,7 +32,10 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo run --release --example hodl_electrum_smoke --quiet 2>&1 | tee smoke.log
+          # The example lives in `hodl-chain-bitcoin`, not the default-run
+          # `hodl` package — `-p` is required or cargo errors out before
+          # ever running the binary.
+          cargo run --release --locked --example hodl_electrum_smoke -p hodl-chain-bitcoin --quiet 2>&1 | tee smoke.log
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
@@ -50,11 +53,28 @@ jobs:
             --color BFD4F2 \
             --force || true
 
-          # Extract failing lines and count them.
+          # Extract failing lines and count them. `grep -c` exits 1 on
+          # zero matches, which collides with `set -euo pipefail`; use
+          # `wc -l` on the captured FAIL_LINES instead, and guard against
+          # the empty-string case where `wc -l` would still report 1.
           FAIL_LINES=$(grep '^FAIL' smoke.log || true)
-          FAIL_COUNT=$(echo "$FAIL_LINES" | grep -c '^FAIL' || echo 0)
+          if [ -z "$FAIL_LINES" ]; then
+            FAIL_COUNT=0
+          else
+            FAIL_COUNT=$(printf '%s\n' "$FAIL_LINES" | wc -l | tr -d ' ')
+          fi
 
-          TITLE="Electrum smoke: ${FAIL_COUNT} endpoint(s) down"
+          # Defensive: if the smoke step failed (workflow exited non-zero)
+          # but produced no FAIL lines, the binary itself broke (compile
+          # error, missing target, panic before the loop). Surface that
+          # as a distinct alert rather than filing a confusing "0
+          # endpoint(s) down" issue.
+          if [ "$FAIL_COUNT" = "0" ]; then
+            FAIL_LINES="(smoke binary failed to produce FAIL lines — see workflow log)"
+            TITLE="Electrum smoke: probe binary failed"
+          else
+            TITLE="Electrum smoke: ${FAIL_COUNT} endpoint(s) down"
+          fi
           RUN_DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
 
           # YAML's `|` block scalar strips the common leading indent
