@@ -1,5 +1,5 @@
 use std::fs::OpenOptions;
-use std::io::IsTerminal;
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -92,6 +92,9 @@ enum KeyringSub {
         /// Wallet name.
         #[arg(default_value = "default")]
         name: String,
+        /// Skip the interactive [y/N] confirmation prompt.
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -119,7 +122,11 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Keyring { sub } => match sub {
-            KeyringSub::Remove { name } => {
+            KeyringSub::Remove { name, yes } => {
+                if !yes && !confirm_keyring_remove(&name)? {
+                    println!("aborted");
+                    return Ok(());
+                }
                 // Delete the OS keyring entry (idempotent — missing entry = ok).
                 if let Err(e) = wallet_keyring::delete_password(&name) {
                     eprintln!("warning: could not remove keyring entry: {e}");
@@ -141,6 +148,23 @@ fn main() -> Result<()> {
             }
         },
     }
+}
+
+/// Interactive [y/N] gate for `hodl keyring remove`. Default-no — Enter on
+/// an empty line aborts. Non-TTY stdin (piped input) treats EOF as abort,
+/// so unattended scripts must pass `--yes` rather than relying on input
+/// redirection silently doing the wrong thing.
+fn confirm_keyring_remove(name: &str) -> Result<bool> {
+    print!("Remove OS keyring entry for wallet \"{name}\"? [y/N] ");
+    io::stdout().flush().ok();
+    let mut line = String::new();
+    let n = io::stdin().lock().read_line(&mut line)?;
+    if n == 0 {
+        // EOF — treat as no.
+        return Ok(false);
+    }
+    let trimmed = line.trim();
+    Ok(matches!(trimmed, "y" | "Y" | "yes" | "Yes" | "YES"))
 }
 
 /// Initialize tracing.
