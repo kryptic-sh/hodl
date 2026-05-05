@@ -8,14 +8,45 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-05
+
 ### Added
 
+- Opt-in OS keyring backend for vault password storage. New `keyring` Cargo
+  feature on `hodl-wallet` wraps Secret Service / macOS Keychain / Windows
+  Credential Manager via `keyring` v3 with the per-platform feature flags
+  matched verbatim to the inbx 0.3.2 set (avoids the mock-backend silent-failure
+  trap). Threat model: stores the typed vault password as a bearer credential
+  keyed by wallet name; Argon2id + ChaCha20-Poly1305 seed-at-rest crypto is
+  unchanged. Wired through `hodl init --keyring` / `hodl restore --keyring` for
+  opt-in on creation, and a new `hodl keyring remove [name]` subcommand for
+  opt-out. Lock screen tries a keyring auto-unlock before showing the password
+  prompt and self-recovers by re-storing after a manual unlock if the entry was
+  wiped out-of-band. Per-wallet sidecar `<name>.meta.toml` carries the
+  `keyring: bool` flag — missing file returns default, so pre-feature wallets
+  keep working unchanged. Zeroize discipline preserved on every exit path.
+  Closes #17.
 - Per-row spinner in the Addresses sub-view. Rows whose balance is still being
   fetched render with `hjkl_ratatui::spinner::frame()` in the confirmed/pending
   columns and a dimmed style; rows backed by a completed fetch show the final
   number. Live in-flight set is driven by new `ScanEvent::AddressDiscovered` /
   `ScanEvent::AddressCompleted` events emitted from the streaming scan worker.
   Closes #5.
+
+### Fixed
+
+- Electrum smoke CI workflow: `cargo run --example` now passes
+  `-p hodl-chain-bitcoin` so the example resolves outside the default-run
+  package, and the issue title uses `wc -l` instead of `grep -c | echo 0` to
+  avoid embedding a stray newline (`Electrum smoke: 0\n0 endpoint(s) down`).
+  Defensive fallback issue title surfaces when the smoke binary itself fails to
+  produce FAIL lines.
+
+### Docs
+
+- Endpoint retention policy documented in `default_chains()`
+  (`crates/hodl-config/src/config.rs`) — defaults stay in even when smoke flags
+  them down; `try_endpoints` handles failover. See #19 for the full policy.
 
 ## [0.5.0] - 2026-05-05
 
@@ -699,7 +730,8 @@ across every backend.
 
 - Workspace scaffold (M0): crates, CI lint/build/test on Linux.
 
-[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.6.0
 [0.5.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.5.0
 [0.4.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.4.0
 [0.3.1]: https://github.com/kryptic-sh/hodl/releases/tag/v0.3.1
