@@ -14,7 +14,7 @@ members = [
 default-members = ["apps/hodl"]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -64,13 +64,13 @@ tiny-keccak = { version = "2", features = ["keccak"] }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
 base58-monero = "2"
 
-hodl-core = { path = "crates/hodl-core", version = "0.4" }
-hodl-tui = { path = "crates/hodl-tui", version = "0.4" }
-hodl-config = { path = "crates/hodl-config", version = "0.4" }
-hodl-wallet = { path = "crates/hodl-wallet", version = "0.4" }
-hodl-chain-bitcoin = { path = "crates/hodl-chain-bitcoin", version = "0.4" }
-hodl-chain-ethereum = { path = "crates/hodl-chain-ethereum", version = "0.4" }
-hodl-chain-monero = { path = "crates/hodl-chain-monero", version = "0.4" }
+hodl-core = { path = "crates/hodl-core", version = "0.5" }
+hodl-tui = { path = "crates/hodl-tui", version = "0.5" }
+hodl-config = { path = "crates/hodl-config", version = "0.5" }
+hodl-wallet = { path = "crates/hodl-wallet", version = "0.5" }
+hodl-chain-bitcoin = { path = "crates/hodl-chain-bitcoin", version = "0.5" }
+hodl-chain-ethereum = { path = "crates/hodl-chain-ethereum", version = "0.5" }
+hodl-chain-monero = { path = "crates/hodl-chain-monero", version = "0.5" }
 
 [profile.release]
 lto = "thin"
