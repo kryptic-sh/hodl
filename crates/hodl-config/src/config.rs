@@ -157,6 +157,10 @@ impl Default for Config {
 
 /// Curated public-Electrum endpoint defaults. All TLS. Sourced from
 /// `1209k.com/bitcoin-eye` reliability monitor on 2026-05-04.
+///
+/// Policy: do not curate down endpoints out on first smoke alert.
+/// `try_endpoints` (electrum.rs) handles failover; defaults stay until
+/// sustained downtime + curated replacement. See hodl#19.
 fn default_chains() -> HashMap<ChainId, ChainConfig> {
     use Endpoint::Electrum;
 
