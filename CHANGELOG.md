@@ -8,6 +8,15 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Per-row spinner in the Addresses sub-view. Rows whose balance is still being
+  fetched render with `hjkl_ratatui::spinner::frame()` in the confirmed/pending
+  columns and a dimmed style; rows backed by a completed fetch show the final
+  number. Live in-flight set is driven by new `ScanEvent::AddressDiscovered` /
+  `ScanEvent::AddressCompleted` events emitted from the streaming scan worker.
+  Closes #5.
+
 ## [0.5.0] - 2026-05-05
 
 ### Fixed

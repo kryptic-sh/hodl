@@ -651,9 +651,12 @@ impl BitcoinChain {
 
     /// Walk both receive (change=0) and change (change=1) chains, deriving
     /// each address, querying its history length and balance. For each
-    /// **used** address (history > 0 OR balance > 0) the callback `on_used`
-    /// is invoked with the discovered `UsedAddress` before the scan continues.
-    /// At the end, the same data is also returned in the final `WalletScan`.
+    /// address about to be fetched, `on_discovered(change, index, addr)` is
+    /// called **before** the network round-trip. Once the fetch completes,
+    /// `on_completed(change, index, addr, used)` is called where `used` is
+    /// `Some(&UsedAddress)` for addresses with history, `None` for empty ones
+    /// (gap-walk skips). This lets the UI maintain an "in-flight" set that
+    /// populates before the balance is known and drains symmetrically.
     ///
     /// Stops walking each chain when `gap_limit` consecutive addresses with
     /// no history are seen. Same semantics as `scan_used_addresses` —
@@ -662,13 +665,15 @@ impl BitcoinChain {
     /// Use this when you want to surface partial results as the scan
     /// progresses (e.g. animated UI updates). The non-streaming
     /// `scan_used_addresses` is preserved as a thin wrapper that calls
-    /// this with a no-op closure.
+    /// this with no-op closures.
+    #[allow(clippy::type_complexity)]
     pub fn scan_used_addresses_streaming(
         &self,
         seed: &[u8; 64],
         account: u32,
         gap_limit: u32,
-        on_used: &mut dyn FnMut(&UsedAddress),
+        on_discovered: &mut dyn FnMut(u32, u32, &str),
+        on_completed: &mut dyn FnMut(u32, u32, &str, Option<&UsedAddress>),
     ) -> Result<WalletScan> {
         let mut scan = WalletScan::default();
 
@@ -688,9 +693,14 @@ impl BitcoinChain {
                 let addr = hodl_core::Address::new(addr_str.clone(), self.params.chain_id);
                 let scripthash = self.scripthash_for(&addr)?;
 
+                // Signal "about to fetch" before the network round-trip.
+                on_discovered(change, index, &addr_str);
+
                 let count = self.electrum.borrow_mut().get_history_count(&scripthash)?;
 
                 if count == 0 {
+                    // Empty address — drain the in-flight set without adding a row.
+                    on_completed(change, index, &addr_str, None);
                     consecutive_unused += 1;
                     if consecutive_unused >= gap_limit {
                         // Record highest index reached (last checked index before break).
@@ -726,10 +736,10 @@ impl BitcoinChain {
                         account,
                         index,
                         change,
-                        address: addr_str,
+                        address: addr_str.clone(),
                         balance,
                     };
-                    on_used(&used);
+                    on_completed(change, index, &addr_str, Some(&used));
                     scan.used.push(used);
                 }
 
@@ -751,14 +761,20 @@ impl BitcoinChain {
     /// This is a blocking operation — caller should run it on a background
     /// thread.
     ///
-    /// Thin wrapper over `scan_used_addresses_streaming` with a no-op callback.
+    /// Thin wrapper over `scan_used_addresses_streaming` with no-op callbacks.
     pub fn scan_used_addresses(
         &self,
         seed: &[u8; 64],
         account: u32,
         gap_limit: u32,
     ) -> Result<WalletScan> {
-        self.scan_used_addresses_streaming(seed, account, gap_limit, &mut |_| {})
+        self.scan_used_addresses_streaming(
+            seed,
+            account,
+            gap_limit,
+            &mut |_, _, _| {},
+            &mut |_, _, _, _| {},
+        )
     }
 }
 

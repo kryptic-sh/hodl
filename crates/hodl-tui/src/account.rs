@@ -29,6 +29,7 @@
 //! scanning, with a wall-clock spinner frame next to the numbers. The Addresses
 //! sub-view (`d`) opens as soon as the partial scan has any used address.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -105,9 +106,37 @@ enum ScanEvent {
         pinned: String,
         presented: String,
     },
+    /// Emitted just before the balance round-trip for `address`. The UI adds
+    /// this to `in_flight_addresses` so it can render a spinner row.
+    AddressDiscovered {
+        change: u32,
+        index: u32,
+        address: String,
+    },
+    /// Emitted after the balance round-trip (used or empty). The UI removes
+    /// the address from `in_flight_addresses`. For used addresses a `Used`
+    /// event is also sent; for empty ones only this event fires.
+    AddressCompleted { address: String },
 }
 
 use crate::retry::{self, AttemptResult, MAX_ATTEMPTS as MAX_SCAN_ATTEMPTS};
+
+/// Metadata for an address whose balance fetch is currently in progress.
+pub struct InFlightAddress {
+    pub change: u32,
+    pub index: u32,
+}
+
+/// A unified address row for the Addresses sub-view: either a completed
+/// fetch (balance known) or an in-flight fetch (spinner shown).
+pub enum AddressRow<'a> {
+    Final(&'a UsedAddress),
+    InFlight {
+        change: u32,
+        index: u32,
+        address: &'a str,
+    },
+}
 
 /// Action emitted by the account screen to the parent app loop.
 #[derive(Debug)]
@@ -184,6 +213,10 @@ pub struct AccountState {
     /// `ScanEvent::Tokens` after the native balance scan completes. Empty for
     /// non-EVM chains or when no tokens are configured.
     pub token_rows: Vec<TokenRow>,
+    /// Addresses whose balance fetch is currently in progress. Populated by
+    /// `ScanEvent::AddressDiscovered`, drained by `ScanEvent::AddressCompleted`.
+    /// Keyed by the address string for O(1) membership tests in the renderer.
+    pub in_flight_addresses: HashMap<String, InFlightAddress>,
 }
 
 impl AccountState {
@@ -204,6 +237,7 @@ impl AccountState {
             data_root,
             tofu_mismatch: None,
             token_rows: Vec::new(),
+            in_flight_addresses: HashMap::new(),
         }
     }
 
@@ -221,6 +255,30 @@ impl AccountState {
         self.scan.as_ref().unwrap_or(&self.partial_scan)
     }
 
+    /// Unified address rows for the Addresses sub-view. Merges completed
+    /// scan entries (balance known) with currently-in-flight entries
+    /// (spinner shown). Sorted receive-first, then index ascending.
+    pub fn address_rows(&self) -> Vec<AddressRow<'_>> {
+        let scan_ref = self.live_scan();
+        let mut rows: Vec<AddressRow<'_>> = scan_ref.used.iter().map(AddressRow::Final).collect();
+        for (addr, info) in &self.in_flight_addresses {
+            // Skip if already in scan.used (race: AddressCompleted might not
+            // have fired yet but Used did, or a completed scan holds the entry).
+            if !scan_ref.used.iter().any(|u| u.address == *addr) {
+                rows.push(AddressRow::InFlight {
+                    change: info.change,
+                    index: info.index,
+                    address: addr.as_str(),
+                });
+            }
+        }
+        rows.sort_by_key(|r| match r {
+            AddressRow::Final(u) => (u.change, u.index),
+            AddressRow::InFlight { change, index, .. } => (*change, *index),
+        });
+        rows
+    }
+
     /// Poll the pending scan channel, draining all queued events in one pass.
     ///
     /// Returns `true` if state changed (caller should redraw), `false` if the
@@ -234,6 +292,9 @@ impl AccountState {
         loop {
             match rx.try_recv() {
                 Ok(ScanEvent::Used(used)) => {
+                    // Defensively remove from in-flight (AddressCompleted may
+                    // arrive after Used for the same address; either order is fine).
+                    self.in_flight_addresses.remove(&used.address);
                     self.partial_scan.total.confirmed += used.balance.confirmed;
                     self.partial_scan.total.pending += used.balance.pending;
                     self.partial_scan.used.push(used);
@@ -246,6 +307,7 @@ impl AccountState {
                     self.completed_scan = Some(final_scan);
                     self.scan_error = None;
                     self.partial_scan = WalletScan::default();
+                    self.in_flight_addresses.clear();
                     self.pending_scan = None;
                     return true;
                 }
@@ -259,6 +321,7 @@ impl AccountState {
                     self.scan_error = Some(msg);
                     self.scan = None;
                     self.partial_scan = WalletScan::default();
+                    self.in_flight_addresses.clear();
                     self.pending_scan = None;
                     return true;
                 }
@@ -274,6 +337,7 @@ impl AccountState {
                     });
                     self.scan_error = Some("TOFU mismatch — review trust prompt".into());
                     self.partial_scan = WalletScan::default();
+                    self.in_flight_addresses.clear();
                     self.pending_scan = None;
                     return true;
                 }
@@ -282,8 +346,22 @@ impl AccountState {
                     // different Electrum server. Drop the partial state from
                     // the previous attempt; the retry rebuilds from scratch.
                     self.partial_scan = WalletScan::default();
+                    self.in_flight_addresses.clear();
                     self.token_rows = Vec::new();
                     self.scan_attempt = attempt;
+                    changed = true;
+                }
+                Ok(ScanEvent::AddressDiscovered {
+                    change,
+                    index,
+                    address,
+                }) => {
+                    self.in_flight_addresses
+                        .insert(address, InFlightAddress { change, index });
+                    changed = true;
+                }
+                Ok(ScanEvent::AddressCompleted { address }) => {
+                    self.in_flight_addresses.remove(&address);
                     changed = true;
                 }
                 Err(TryRecvError::Empty) => {
@@ -293,6 +371,7 @@ impl AccountState {
                     self.scan_error = Some("scan thread panicked".into());
                     self.scan = None;
                     self.partial_scan = WalletScan::default();
+                    self.in_flight_addresses.clear();
                     self.pending_scan = None;
                     return true;
                 }
@@ -325,6 +404,7 @@ impl AccountState {
         self.scan_error = None;
         self.completed_scan = None;
         self.partial_scan = WalletScan::default();
+        self.in_flight_addresses.clear();
         self.token_rows = Vec::new();
         self.scan_attempt = 1;
         self.flash = None;
@@ -619,11 +699,31 @@ fn run_scan_attempt(
 
     match active {
         ActiveChain::Bitcoin(btc_chain) => {
-            let tx_clone = tx.clone();
-            let mut on_used = |used: &UsedAddress| {
-                let _ = tx_clone.send(ScanEvent::Used(used.clone()));
+            let tx_disc = tx.clone();
+            let mut on_discovered = |change: u32, index: u32, addr: &str| {
+                let _ = tx_disc.send(ScanEvent::AddressDiscovered {
+                    change,
+                    index,
+                    address: addr.to_string(),
+                });
             };
-            match btc_chain.scan_used_addresses_streaming(seed, account, gap_limit, &mut on_used) {
+            let tx_comp = tx.clone();
+            let mut on_completed =
+                |_change: u32, _index: u32, addr: &str, used: Option<&UsedAddress>| {
+                    if let Some(u) = used {
+                        let _ = tx_comp.send(ScanEvent::Used(u.clone()));
+                    }
+                    let _ = tx_comp.send(ScanEvent::AddressCompleted {
+                        address: addr.to_string(),
+                    });
+                };
+            match btc_chain.scan_used_addresses_streaming(
+                seed,
+                account,
+                gap_limit,
+                &mut on_discovered,
+                &mut on_completed,
+            ) {
                 Ok(scan) => {
                     let _ = tx.send(ScanEvent::Done(scan));
                     AttemptResult::Done

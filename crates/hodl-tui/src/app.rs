@@ -647,7 +647,7 @@ impl App {
                             } = &mut self.screen
                             {
                                 let scanning = accounts.is_scanning();
-                                addresses::draw(f, area, addresses, accounts.live_scan(), scanning);
+                                addresses::draw(f, area, addresses, accounts, scanning);
                             }
                             if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
@@ -678,7 +678,7 @@ impl App {
                             } = &mut self.screen
                             {
                                 let scanning = accounts.is_scanning();
-                                addresses::draw(f, area, addresses, accounts.live_scan(), scanning);
+                                addresses::draw(f, area, addresses, accounts, scanning);
                             }
                             if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
@@ -750,7 +750,7 @@ impl App {
                             } = &mut self.screen
                             {
                                 let scanning = accounts.is_scanning();
-                                addresses::draw(f, area, addresses, accounts.live_scan(), scanning);
+                                addresses::draw(f, area, addresses, accounts, scanning);
                             }
                             if let Some((ref overlay, _)) = self.tofu_overlay {
                                 overlay.draw(f, f.area());
@@ -776,7 +776,7 @@ impl App {
                             } = &mut self.screen
                             {
                                 let scanning = accounts.is_scanning();
-                                addresses::draw(f, area, addresses, accounts.live_scan(), scanning);
+                                addresses::draw(f, area, addresses, accounts, scanning);
                             }
                             if let Some(ref mut overlay) = self.help_overlay {
                                 overlay.draw(f, area);
@@ -786,7 +786,7 @@ impl App {
                     }
 
                     // Mouse scroll: one row per event. `len` is the live
-                    // row count from the current scan view.
+                    // row count from the current scan view (Final + InFlight).
                     if let (
                         Event::Mouse(m),
                         Screen::Addresses {
@@ -796,7 +796,7 @@ impl App {
                         },
                     ) = (&ev, &mut self.screen)
                     {
-                        let len = accounts.live_scan().used.len();
+                        let len = accounts.address_rows().len();
                         match m.kind {
                             MouseEventKind::ScrollUp => {
                                 addresses.move_selection(-1, len);
@@ -818,7 +818,7 @@ impl App {
                         } => {
                             if let Event::Key(k) = ev {
                                 if k.kind == KeyEventKind::Press {
-                                    let len = accounts.live_scan().used.len();
+                                    let len = accounts.address_rows().len();
                                     addresses.handle_key(k, len)
                                 } else {
                                     None
@@ -858,13 +858,7 @@ impl App {
                                 } = &mut self.screen
                                 {
                                     let scanning = accounts.is_scanning();
-                                    addresses::draw(
-                                        f,
-                                        area,
-                                        addresses,
-                                        accounts.live_scan(),
-                                        scanning,
-                                    );
+                                    addresses::draw(f, area, addresses, accounts, scanning);
                                 }
                             })?;
                         }

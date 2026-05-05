@@ -18,7 +18,6 @@
 //! network access required.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use hodl_chain_bitcoin::WalletScan;
 use hodl_core::ChainId;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -26,6 +25,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, TableState};
 
+use crate::account::{AccountState, AddressRow};
 use crate::format;
 
 /// Action emitted to the parent (app.rs) when the addresses screen wants to
@@ -131,15 +131,15 @@ impl AddressesState {
 
 /// Render the Addresses table.
 ///
-/// `scan` is the live wallet scan owned by `AccountState` — pass
-/// `account.scan.as_ref().unwrap_or(&account.partial_scan)` so a
-/// completed snapshot wins over an in-flight partial when both exist.
-/// `scanning` controls the footer label (live spinner hint vs. static).
+/// `account` is the live `AccountState` — its `address_rows()` method
+/// merges completed scan entries with currently-in-flight entries so the
+/// caller doesn't need to pass the scan separately. `scanning` controls the
+/// footer label (live spinner hint vs. static) and the border colour.
 pub fn draw(
     f: &mut Frame,
     area: Rect,
     state: &mut AddressesState,
-    scan: &WalletScan,
+    account: &AccountState,
     scanning: bool,
 ) {
     let chain_name = state.chain.display_name();
@@ -159,16 +159,14 @@ pub fn draw(
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(inner);
 
-    // Sort the live scan into receive-first / index-ascending order. The
-    // worker streams in receive-then-change order already, but a partial
-    // mid-scan view may be incomplete — sort defensively.
-    let mut sorted: Vec<&hodl_chain_bitcoin::UsedAddress> = scan.used.iter().collect();
-    sorted.sort_by_key(|u| (u.change, u.index));
+    // Build the unified row list (Final + InFlight), already sorted
+    // receive-first / index-ascending by address_rows().
+    let rows_data = account.address_rows();
+    let len = rows_data.len();
 
-    // Clamp the cursor so streaming row deletions / insertions can't
-    // leave the selection past the end. Selecting None when empty so the
-    // table renders cleanly with no highlight.
-    let len = sorted.len();
+    // Clamp the cursor so streaming row insertions can't leave the
+    // selection past the end. Selecting None when empty so the table
+    // renders cleanly with no highlight.
     if len == 0 {
         state.table_state.select(None);
     } else {
@@ -176,7 +174,7 @@ pub fn draw(
         state.table_state.select(Some(sel));
     }
 
-    if sorted.is_empty() {
+    if rows_data.is_empty() {
         let msg = if scanning {
             "scanning… no used addresses found yet"
         } else {
@@ -208,26 +206,63 @@ pub fn draw(
         let chain = state.chain;
         let purpose = state.purpose;
         let coin = state.coin;
-        let rows: Vec<Row> = sorted
+        // account index is always 0 for Bitcoin-family; InFlight rows don't
+        // have it, but derive_address uses the same account=0 convention.
+        let account_idx: u32 = 0;
+        let spinner = hjkl_ratatui::spinner::frame();
+        let rows: Vec<Row> = rows_data
             .iter()
-            .map(|u| {
-                let (type_label, type_color) = if u.change == 0 {
-                    ("recv", Color::Green)
-                } else {
-                    ("chg", Color::Yellow)
-                };
-                let path = format!(
-                    "m/{purpose}'/{coin}'/{}'/{}/{}",
-                    u.account, u.change, u.index
-                );
-                Row::new(vec![
-                    ratatui::widgets::Cell::from(u.index.to_string()),
-                    ratatui::widgets::Cell::from(type_label).style(Style::default().fg(type_color)),
-                    ratatui::widgets::Cell::from(path),
-                    ratatui::widgets::Cell::from(u.address.clone()),
-                    ratatui::widgets::Cell::from(format::format_amount(u.balance.confirmed, chain)),
-                    ratatui::widgets::Cell::from(format::format_amount(u.balance.pending, chain)),
-                ])
+            .map(|row| match row {
+                AddressRow::Final(u) => {
+                    let (type_label, type_color) = if u.change == 0 {
+                        ("recv", Color::Green)
+                    } else {
+                        ("chg", Color::Yellow)
+                    };
+                    let path = format!(
+                        "m/{purpose}'/{coin}'/{}'/{}/{}",
+                        u.account, u.change, u.index
+                    );
+                    Row::new(vec![
+                        ratatui::widgets::Cell::from(u.index.to_string()),
+                        ratatui::widgets::Cell::from(type_label)
+                            .style(Style::default().fg(type_color)),
+                        ratatui::widgets::Cell::from(path),
+                        ratatui::widgets::Cell::from(u.address.clone()),
+                        ratatui::widgets::Cell::from(format::format_amount(
+                            u.balance.confirmed,
+                            chain,
+                        )),
+                        ratatui::widgets::Cell::from(format::format_amount(
+                            u.balance.pending,
+                            chain,
+                        )),
+                    ])
+                }
+                AddressRow::InFlight {
+                    change,
+                    index,
+                    address,
+                } => {
+                    let (type_label, type_color) = if *change == 0 {
+                        ("recv", Color::Green)
+                    } else {
+                        ("chg", Color::Yellow)
+                    };
+                    let path = format!("m/{purpose}'/{coin}'/{account_idx}'/{change}/{index}");
+                    let dim = Style::default().fg(Color::DarkGray);
+                    Row::new(vec![
+                        ratatui::widgets::Cell::from(index.to_string()).style(dim),
+                        ratatui::widgets::Cell::from(type_label)
+                            .style(Style::default().fg(type_color)),
+                        ratatui::widgets::Cell::from(path).style(dim),
+                        ratatui::widgets::Cell::from(*address).style(dim),
+                        ratatui::widgets::Cell::from(spinner)
+                            .style(Style::default().fg(Color::Cyan)),
+                        ratatui::widgets::Cell::from(spinner)
+                            .style(Style::default().fg(Color::Cyan)),
+                    ])
+                }
             })
             .collect();
 
