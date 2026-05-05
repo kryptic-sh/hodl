@@ -259,6 +259,7 @@ impl LockState {
             ("Esc".into(), "Return to Normal mode / quit".into()),
             ("Enter".into(), "Submit password".into()),
             ("w".into(), "Open wallet switcher".into()),
+            ("1–9".into(), "Jump straight to the Nth wallet".into()),
             ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
             ("?".into(), "Show this help".into()),
         ]
@@ -396,6 +397,29 @@ fn handle_key(
             state.picker = Some(hjkl_picker::Picker::new(Box::new(source)));
         }
         return None;
+    }
+
+    // `1`–`9` in Normal mode jump straight to the Nth wallet (alphabetical
+    // order, same list as the `w` picker shows). Out-of-range silently
+    // surfaces a hint instead of falling through to form input.
+    if state.form.mode == FormMode::Normal
+        && let KeyCode::Char(c @ '1'..='9') = k.code
+    {
+        let idx = (c as u8 - b'1') as usize;
+        let names = list_wallets(data_root).unwrap_or_default();
+        match names.get(idx) {
+            Some(name) if name != &wallet.name => {
+                return Some(Outcome::SwitchWallet(name.clone()));
+            }
+            Some(_) => {
+                // Pressed the index of the currently-active wallet — no-op.
+                return None;
+            }
+            None => {
+                state.message = Some((format!("no wallet at slot {c}"), MessageKind::Info));
+                return None;
+            }
+        }
     }
 
     state.form.handle_input(Input::from(k));
