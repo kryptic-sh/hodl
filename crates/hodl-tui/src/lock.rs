@@ -68,6 +68,7 @@ where
     B::Error: Send + Sync + 'static,
 {
     let mut state = LockState::new();
+    state.idle_timeout = idle_timeout;
     let mut help_overlay: Option<HelpOverlay> = None;
 
     // ── Keyring auto-unlock ───────────────────────────────────────────────
@@ -215,6 +216,9 @@ pub(crate) struct LockState {
     form: Form,
     message: Option<(String, MessageKind)>,
     pub(crate) last_activity: Instant,
+    /// Idle timeout — used to render a countdown hint so the user isn't
+    /// surprised when the auto-lock fires. Set by `event_loop`.
+    idle_timeout: Duration,
     /// Wallet switcher picker overlay. `None` when closed.
     picker: Option<hjkl_picker::Picker>,
     /// In-flight unlock attempt channel. `Some` while argon2id is running.
@@ -241,6 +245,7 @@ impl LockState {
             form: make_password_form(),
             message: None,
             last_activity: Instant::now(),
+            idle_timeout: Duration::from_secs(300),
             picker: None,
             pending_unlock: None,
             pending_unlock_pw: None,
@@ -509,12 +514,37 @@ fn draw_locked(f: &mut ratatui::Frame, area: Rect, state: &mut LockState) {
         f.render_widget(p, chunks[2]);
     }
 
+    // Two stacked hint lines — keybinds on top, idle countdown below.
+    let hint_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(chunks[3]);
+
     let hint = Paragraph::new(Line::from(Span::styled(
         "i to type • enter to submit • w wallets • esc to quit",
         Style::default().fg(Color::DarkGray),
     )))
     .alignment(Alignment::Center);
-    f.render_widget(hint, chunks[3]);
+    f.render_widget(hint, hint_chunks[0]);
+
+    let elapsed = state.last_activity.elapsed();
+    let remaining = state.idle_timeout.saturating_sub(elapsed);
+    let secs = remaining.as_secs();
+    let countdown_text = if secs >= 60 {
+        format!("auto-lock in {}m {:02}s", secs / 60, secs % 60)
+    } else {
+        format!("auto-lock in {secs}s")
+    };
+    // Switch to a more prominent color in the final 30s so the user
+    // notices before the timer fires.
+    let countdown_style = if secs <= 30 {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let countdown = Paragraph::new(Line::from(Span::styled(countdown_text, countdown_style)))
+        .alignment(Alignment::Center);
+    f.render_widget(countdown, hint_chunks[1]);
 
     // Picker overlay drawn on top.
     if state.picker.is_some() {
