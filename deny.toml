@@ -1,5 +1,17 @@
 [graph]
 all-features = true
+# Restrict the graph to the targets we actually ship binaries for.
+# Without this, cargo-deny sees every transitive dep across every target
+# in Cargo.lock — including the entire Windows transitive subtree pulled
+# in by `keyring`'s `windows-native` feature, which is `#[cfg(windows)]`-
+# gated and never built on the platforms we ship to.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
 
 [advisories]
 version = 2
@@ -29,13 +41,9 @@ wildcards = "deny"
 allow-wildcard-paths = true
 # Transitive duplicates we can't collapse without forking upstream:
 # - thiserror 1.x: pinned by base58-monero
-# - getrandom 0.2.x: pinned by bip32 → rand_core 0.6
-# - windows-sys 0.52: transitive on Windows builds only
 skip = [
     { crate = "thiserror@1" },
     { crate = "thiserror-impl@1" },
-    { crate = "getrandom@0.2" },
-    { crate = "windows-sys@0.52" },
 ]
 
 [sources]
