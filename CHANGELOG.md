@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-05
+
 ### Added
 
 - Daily Electrum endpoint smoke CI (`.github/workflows/smoke.yml`) probes every
@@ -656,7 +658,8 @@ across every backend.
 
 - Workspace scaffold (M0): crates, CI lint/build/test on Linux.
 
-[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.4.0
 [0.3.1]: https://github.com/kryptic-sh/hodl/releases/tag/v0.3.1
 [0.3.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.2.0
