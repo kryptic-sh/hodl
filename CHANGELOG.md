@@ -8,6 +8,42 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-06
+
+### Added
+
+- Splash screen animation at TUI launch via `hjkl-splash`. The cursor traces the
+  H, O, D, L letterforms over the figlet "ANSI Regular" art block, then
+  transitions to the lock / onboarding screen. Total animation runs ≤1.5 s; any
+  keypress aborts immediately. Disable with `[ui] splash = false` in
+  `~/.config/hodl/config.toml` (default `true`; existing configs without a
+  `[ui]` block get the splash automatically). Art block moves from
+  `apps/hodl/src/art.txt` to `crates/hodl-tui/src/splash/art.txt` as the single
+  source of truth shared between the splash module and the `--help` banner.
+  Closes #20.
+- Keyring opt-in checkbox in the create + restore onboarding forms. Closes the
+  deferred TUI-toggle item from #17 — first-run users no longer need to remember
+  the `--keyring` CLI flag. The checkbox is the source of truth at submit time;
+  passing `--keyring` pre-ticks it.
+
+### Changed
+
+- `hjkl-splash` 0.1 → 0.2. The new release made `Splash` own its time source:
+  `Splash::new` anchors a wall-clock origin, `cells()` reads the current tick
+  internally, and `advance()` is gone. The splash run loop now redraws at a
+  fixed cadence and caps the total animation by elapsed wall-clock time instead
+  of by manual tick count.
+
+### CI
+
+- `deny.toml` `[graph] targets` pinned to the actual ship platforms (Linux
+  glibc/musl + macOS x86_64/aarch64). `keyring`'s `windows-native` feature pulls
+  the entire Windows transitive subtree into `Cargo.lock`; without a `targets`
+  filter, cargo-deny saw 4 versions of `windows-sys`, 2 of `windows-targets`,
+  and the full leaf-crate matrix as ban violations. Those crates are gated on
+  `cfg(windows)` and never built on the platforms we ship to, so dropping them
+  from the analysed graph is the correct fix.
+
 ## [0.6.0] - 2026-05-05
 
 ### Added
@@ -730,7 +766,8 @@ across every backend.
 
 - Workspace scaffold (M0): crates, CI lint/build/test on Linux.
 
-[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hodl/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.7.0
 [0.6.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.6.0
 [0.5.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.5.0
 [0.4.0]: https://github.com/kryptic-sh/hodl/releases/tag/v0.4.0
