@@ -5,7 +5,7 @@
 //! screen. Any keypress aborts immediately. Disable with `[ui] splash =
 //! false` in `~/.config/hodl/config.toml`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event;
@@ -103,13 +103,15 @@ where
         return Ok(());
     }
 
-    let mut splash = Splash::new(ART, PATH);
-    const TICKS: u64 = 30;
-    const TICK_MS: u64 = 50;
+    // hjkl-splash 0.2 owns its own time source — `cells()` reads the wall
+    // clock internally, so the loop just redraws at a fixed cadence and
+    // caps the total animation by elapsed time.
+    let splash = Splash::new(ART, PATH);
+    let start = Instant::now();
+    let total = Duration::from_millis(1500);
+    let frame_period = Duration::from_millis(50);
 
-    for _ in 0..TICKS {
-        splash.advance();
-
+    while start.elapsed() < total {
         terminal.draw(|f| {
             let area = f.area();
             let layout = Layout::centered(area.width, area.height, ROWS, COLS);
@@ -132,7 +134,7 @@ where
             }
         })?;
 
-        if event::poll(Duration::from_millis(TICK_MS))? {
+        if event::poll(frame_period)? {
             // Any event — drain and abort.
             let _ = event::read();
             break;
@@ -155,18 +157,16 @@ mod tests {
     }
 
     #[test]
-    fn splash_advance_runs_n_times() {
-        let mut splash = Splash::new(ART, PATH);
-        for _ in 0..50 {
-            splash.advance();
-        }
+    fn splash_fixed_tick_constructs() {
+        // 0.2 dropped the mutable advance() API in favour of a wall-clock
+        // time source; for tests we pin the tick.
+        let splash = Splash::fixed_tick(ART, PATH, 50);
         assert_eq!(splash.tick(), 50);
     }
 
     #[test]
     fn splash_cells_yields_entries() {
-        let mut splash = Splash::new(ART, PATH);
-        splash.advance();
+        let splash = Splash::fixed_tick(ART, PATH, 5);
         let layout = Layout::centered(120, 40, ROWS, COLS);
         let cells: Vec<_> = splash.cells(layout).collect();
         assert!(!cells.is_empty(), "cells() should yield at least one entry");
