@@ -1114,6 +1114,7 @@ dependencies = [
  "bip32",
  "bs58",
  "hex",
+ "hodl-config",
  "hodl-core",
  "k256",
  "ripemd",

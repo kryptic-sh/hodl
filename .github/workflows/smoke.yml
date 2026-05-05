@@ -1,0 +1,94 @@
+name: Electrum Smoke
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # daily 06:17 UTC
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: electrum-smoke
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  electrum-smoke:
+    name: Probe default Electrum endpoints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run smoke probes
+        id: smoke
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo run --release --example hodl_electrum_smoke --quiet 2>&1 | tee smoke.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: File or update GitHub issue on failure
+        if: steps.smoke.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Ensure the smoke label exists (idempotent).
+          gh label create smoke \
+            --description "Electrum endpoint health alerts" \
+            --color BFD4F2 \
+            --force || true
+
+          # Extract failing lines and count them.
+          FAIL_LINES=$(grep '^FAIL' smoke.log || true)
+          FAIL_COUNT=$(echo "$FAIL_LINES" | grep -c '^FAIL' || echo 0)
+
+          TITLE="Electrum smoke: ${FAIL_COUNT} endpoint(s) down"
+          RUN_DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          # YAML's `|` block scalar strips the common leading indent
+          # (10 spaces here) before handing the script to bash, so the
+          # heredoc receives clean column-1 content with the EOF
+          # terminator correctly recognized at column 1.
+          BODY=$(cat <<EOF
+          ### Electrum endpoint failures — ${RUN_DATE}
+
+          **Run:** [\`${GITHUB_RUN_ID}\`](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})
+
+          \`\`\`
+          ${FAIL_LINES}
+          \`\`\`
+
+          ---
+          Auto-filed by \`.github/workflows/smoke.yml\`. Will be re-edited on subsequent failures; close manually once all servers are back.
+          EOF
+          )
+
+          # Find any open issue with the smoke label.
+          EXISTING=$(gh issue list \
+            --label smoke \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+            echo "Updated issue #${EXISTING}"
+          else
+            gh issue create \
+              --title "$TITLE" \
+              --label smoke \
+              --body "$BODY"
+            echo "Created new issue: ${TITLE}"
+          fi

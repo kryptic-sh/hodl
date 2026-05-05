@@ -26,3 +26,4 @@ k256 = { workspace = true }
 
 [dev-dependencies]
 hex.workspace = true
+hodl-config.workspace = true

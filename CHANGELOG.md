@@ -10,6 +10,10 @@ and this project adheres to
 
 ### Added
 
+- Daily Electrum endpoint smoke CI (`.github/workflows/smoke.yml`) probes every
+  curated default endpoint with a TLS connect + `server.version` call. Files a
+  GitHub issue (label: `smoke`) when any endpoint fails; the issue is updated in
+  place on subsequent failures rather than spamming new issues. Closes #10.
 - Alpine .apk packaging pipeline (release CI builds .apk in `alpine:latest` and
   uploads it as a release asset; install with
   `apk add --allow-untrusted hodl-*.apk`).
