@@ -212,6 +212,7 @@ mod tests {
     fn sample_scan() -> WalletScan {
         WalletScan {
             used: vec![UsedAddress {
+                account: 0,
                 index: 0,
                 change: 0,
                 address: "bc1qexample".into(),

@@ -10,6 +10,12 @@ and this project adheres to
 
 ### Added
 
+- EVM (Ethereum + BSC) multi-account scan. Walks `m/44'/60'/N'/0/0` from
+  N=0 until `gap_limit` consecutive empty accounts (matches the BTC family
+  convention, adapted for the EVM single-address-per-account model).
+  Account 0 is always reported. Per-account ERC-20 token balances are
+  fetched and rendered under each non-empty account. Closes #7.
+
 - ERC-20 token balance reads on Ethereum + BSC summary cards. Configure via
   `[chains.ethereum.tokens]` (or `[chains.bsc_mainnet.tokens]`) in
   `~/.config/hodl/config.toml`:

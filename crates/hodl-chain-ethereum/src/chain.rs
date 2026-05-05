@@ -4,6 +4,7 @@ use hodl_core::{
     Address, Amount, Chain, ChainId, FeeRate, PrivateKeyBytes, SendParams, SignedTx, TxId, TxRef,
     UnsignedTx,
 };
+use tracing::debug;
 
 use crate::address as eth_address;
 use crate::derive;
@@ -21,6 +22,71 @@ pub struct EthereumChain {
 impl EthereumChain {
     pub fn new(params: NetworkParams, rpc: EthRpcClient) -> Self {
         Self { params, rpc }
+    }
+
+    /// Walk the account axis at `m/44'/60'/N'/0/0` from N=0 until `gap_limit`
+    /// consecutive empty accounts. Calls `on_account` for each non-empty account
+    /// (and unconditionally for account 0). "Empty" = native balance == 0;
+    /// token balances are advisory and do not influence the gap walk.
+    ///
+    /// Account 0 is always reported even if empty — the user should always see
+    /// their primary account rather than a confusing "no accounts found" state.
+    ///
+    /// Serial — one `eth_getBalance` + N `eth_call` per account. No parallelism.
+    ///
+    /// On a per-account RPC failure the error propagates immediately (the caller
+    /// can surface it and stop). Per-token errors are non-fatal (returned as
+    /// `Err(…)` in the per-token result vec) consistent with `token_balances`.
+    #[allow(clippy::type_complexity)]
+    pub fn scan_accounts_streaming(
+        &self,
+        seed: &[u8; 64],
+        gap_limit: u32,
+        tokens: &[TokenSpec],
+        on_account: &mut dyn FnMut(u32, String, u128, Vec<(TokenSpec, Result<u128>)>),
+    ) -> Result<()> {
+        let mut empty_run = 0u32;
+        let mut account = 0u32;
+
+        loop {
+            let addr_str = derive::derive_address(seed, account, 0)?;
+            debug!("eth scan account={account} address={addr_str}");
+
+            let native = self.rpc.eth_get_balance(&addr_str)?;
+
+            let is_empty = native == 0;
+
+            if is_empty {
+                // Account 0 is always reported regardless.
+                if account == 0 {
+                    let token_results = if tokens.is_empty() {
+                        Vec::new()
+                    } else {
+                        let holder = Address::new(addr_str.clone(), self.params.chain_id);
+                        self.token_balances(&holder, tokens)
+                    };
+                    on_account(account, addr_str, native, token_results);
+                }
+
+                empty_run += 1;
+                if empty_run >= gap_limit {
+                    break;
+                }
+            } else {
+                empty_run = 0;
+                let holder = Address::new(addr_str.clone(), self.params.chain_id);
+                let token_results = if tokens.is_empty() {
+                    Vec::new()
+                } else {
+                    self.token_balances(&holder, tokens)
+                };
+                on_account(account, addr_str, native, token_results);
+            }
+
+            account += 1;
+        }
+
+        Ok(())
     }
 
     /// Read ERC-20 `balanceOf` for `holder` against each supplied token contract.

@@ -216,7 +216,10 @@ pub fn draw(
                 } else {
                     ("chg", Color::Yellow)
                 };
-                let path = format!("m/{purpose}'/{coin}'/0'/{}/{}", u.change, u.index);
+                let path = format!(
+                    "m/{purpose}'/{coin}'/{}'/{}/{}",
+                    u.account, u.change, u.index
+                );
                 Row::new(vec![
                     ratatui::widgets::Cell::from(u.index.to_string()),
                     ratatui::widgets::Cell::from(type_label).style(Style::default().fg(type_color)),

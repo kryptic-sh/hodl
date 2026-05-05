@@ -57,6 +57,9 @@ use crate::tofu_overlay::TofuMismatchInfo;
 /// A resolved (or failed) ERC-20 / BEP-20 token balance row.
 #[derive(Clone, Debug)]
 pub struct TokenRow {
+    /// HD account index this token balance belongs to (EVM multi-account).
+    /// Always 0 for non-EVM chains.
+    pub account: u32,
     pub symbol: String,
     pub decimals: u8,
     /// `Ok(atoms)` on successful `balanceOf` read; `Err(msg)` on failure.
@@ -64,8 +67,13 @@ pub struct TokenRow {
 }
 
 impl TokenRow {
-    fn from_spec_result(spec: &TokenSpec, result: hodl_core::error::Result<u128>) -> Self {
+    fn from_spec_result(
+        account: u32,
+        spec: &TokenSpec,
+        result: hodl_core::error::Result<u128>,
+    ) -> Self {
         TokenRow {
+            account,
             symbol: spec.symbol.clone(),
             decimals: spec.decimals,
             balance: result.map_err(|e| e.to_string()),
@@ -242,7 +250,9 @@ impl AccountState {
                     return true;
                 }
                 Ok(ScanEvent::Tokens(rows)) => {
-                    self.token_rows = rows;
+                    // Append rather than replace: each account streams its own
+                    // token rows via a separate ScanEvent::Tokens event.
+                    self.token_rows.extend(rows);
                     changed = true;
                 }
                 Ok(ScanEvent::Error(msg)) => {
@@ -622,29 +632,51 @@ fn run_scan_attempt(
             }
         }
         ActiveChain::Ethereum(eth_chain, tokens) => {
-            let result = single_address_scan(chain, tx, || {
-                let addr = eth_chain
-                    .derive(seed, account, 0)
-                    .map_err(|e| (e, "derive"))?;
-                let amount = eth_chain.balance(&addr).map_err(|e| (e, "balance"))?;
-                Ok((addr.as_str().to_string(), amount.atoms() as u64))
-            });
-            // After native balance scan, fetch token balances if any tokens
-            // are configured. Errors are per-token and never abort the batch.
-            if !tokens.is_empty() {
-                // Re-derive the address to pass to token_balances.
-                // If derive fails here we skip token reads silently (native
-                // balance already surfaced the error via single_address_scan).
-                if let Ok(addr) = eth_chain.derive(seed, account, 0) {
-                    let raw = eth_chain.token_balances(&addr, &tokens);
-                    let rows: Vec<TokenRow> = raw
-                        .into_iter()
-                        .map(|(spec, res)| TokenRow::from_spec_result(&spec, res))
-                        .collect();
-                    let _ = tx.send(ScanEvent::Tokens(rows));
+            // Multi-account gap walk: m/44'/60'/N'/0/0 from N=0.
+            // Account 0 always reported; gap walk continues until gap_limit
+            // consecutive empty accounts stop it.
+            //
+            // We accumulate the full WalletScan locally so Done carries a
+            // correct final snapshot (the UI promotes partial→scan on Done).
+            let mut final_scan = hodl_chain_bitcoin::WalletScan::default();
+
+            let scan_result = eth_chain.scan_accounts_streaming(
+                seed,
+                gap_limit,
+                &tokens,
+                &mut |acct, addr_str, native_wei, token_results| {
+                    let balance = hodl_chain_bitcoin::BalanceSplit {
+                        confirmed: native_wei.min(u64::MAX as u128) as u64,
+                        pending: 0,
+                    };
+                    final_scan.total.confirmed =
+                        final_scan.total.confirmed.saturating_add(balance.confirmed);
+                    let used = UsedAddress {
+                        account: acct,
+                        index: 0,
+                        change: 0,
+                        address: addr_str,
+                        balance,
+                    };
+                    final_scan.used.push(used.clone());
+                    let _ = tx.send(ScanEvent::Used(used));
+
+                    if !token_results.is_empty() {
+                        let rows: Vec<TokenRow> = token_results
+                            .into_iter()
+                            .map(|(spec, res)| TokenRow::from_spec_result(acct, &spec, res))
+                            .collect();
+                        let _ = tx.send(ScanEvent::Tokens(rows));
+                    }
+                },
+            );
+            match scan_result {
+                Ok(()) => {
+                    let _ = tx.send(ScanEvent::Done(final_scan));
+                    AttemptResult::Done
                 }
+                Err(e) => retry::classify(chain, "scan", e),
             }
-            result
         }
         ActiveChain::Monero(xmr_chain) => single_address_scan(chain, tx, || {
             let addr = xmr_chain
@@ -671,6 +703,7 @@ fn single_address_scan(
                 pending: 0,
             };
             let used = UsedAddress {
+                account: 0,
                 index: 0,
                 change: 0,
                 address,
@@ -804,14 +837,23 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
             ]),
         ];
         // ERC-20 / BEP-20 token rows (EVM chains only).
+        // Each row carries an account index; suffix with [acct N] when N > 0
+        // so the user can see which HD account holds each token balance.
         for row in &state.token_rows {
+            let acct_suffix = if row.account > 0 {
+                format!(" [acct {}]", row.account)
+            } else {
+                String::new()
+            };
             let line = match &row.balance {
                 Ok(atoms) => {
                     let formatted = format::format_token(*atoms, row.decimals, &row.symbol);
-                    Line::from(Span::raw(format!("   token:        {formatted}")))
+                    Line::from(Span::raw(format!(
+                        "   token:        {formatted}{acct_suffix}"
+                    )))
                 }
                 Err(msg) => Line::from(Span::styled(
-                    format!("   err:          {} — {}", row.symbol, msg),
+                    format!("   err:          {}{acct_suffix} — {msg}", row.symbol),
                     Style::default().fg(Color::DarkGray),
                 )),
             };

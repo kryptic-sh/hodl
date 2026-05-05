@@ -136,6 +136,12 @@ impl BalanceSplit {
 /// One used address discovered during a gap-limit wallet scan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsedAddress {
+    /// BIP-44 account index. For Bitcoin-family chains this is always the
+    /// `account` passed to `scan_used_addresses_streaming` (typically 0).
+    /// For EVM multi-account scans this is the HD account axis
+    /// (`m/44'/60'/N'/0/0`).
+    #[serde(default)]
+    pub account: u32,
     pub index: u32,
     /// 0 = receive (external) chain, 1 = change (internal) chain — BIP-44 path component.
     pub change: u32,
@@ -717,6 +723,7 @@ impl BitcoinChain {
                     scan.total.pending += balance.pending;
 
                     let used = UsedAddress {
+                        account,
                         index,
                         change,
                         address: addr_str,
