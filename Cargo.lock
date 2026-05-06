@@ -1395,9 +1395,9 @@ dependencies = [
 
 [[package]]
 name = "hjkl-picker"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27d1f6fcb06622c85a697bc1c5d6b63965c651242c83c0bf163499f64c6d6c32"
+checksum = "d124f9c34f336ea885ae92764baff7e99148101ef07937922c13c9e58505d880"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
