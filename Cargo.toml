@@ -48,7 +48,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Light-wallet crypto primitives. Pulled in at workspace level so all
 # crates agree on a single version of the secp256k1 / hashing stack.
 secp256k1 = { version = "0.29", features = ["rand", "global-context"] }
-sha2 = "0.10"
+sha2 = "0.11"
 ripemd = "0.1"
 bip39 = { version = "2", features = ["crate_rand"] }
 bip32 = "0.5"
