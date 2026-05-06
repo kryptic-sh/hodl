@@ -13,8 +13,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate the release pipeline on the full CI suite (test matrix + cargo-deny).
+  # The tag-push commit is independent of any main-push run — nothing prevents
+  # tagging a commit that wasn't pushed to main, or a CI failure on one stream
+  # while release proceeds on the other. Calling ci.yml here makes the gate
+  # explicit. The bump-commit main push itself is suppressed by the skip
+  # conditions in ci.yml so we don't double-run on the same SHA.
+  gate:
+    name: CI gate
+    uses: ./.github/workflows/ci.yml
+
   build:
     name: Build ${{ matrix.target }}
+    needs: [gate]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write

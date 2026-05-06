@@ -5,13 +5,26 @@ on:
     branches: ['main']
   pull_request:
     branches: ['main']
+  workflow_dispatch:
+  # release.yml calls this workflow as a gate so a tag-push runs the
+  # full CI suite before packaging starts.
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
 
+# When BCTP pushes a `chore: bump version` commit to main, the same SHA is
+# tag-pushed moments later — release.yml fires and invokes this workflow as
+# a reusable gate. Skip the standalone main-push run for that exact commit
+# subject so CI doesn't execute twice on the same SHA. Disambiguation:
+#   - main-push of bump commit  → ref=refs/heads/main, msg=chore: bump… → SKIP
+#   - tag-push via release.yml  → workflow_call (no head_commit gate)   → RUN
+#   - PR / direct main push     → other event, or different msg          → RUN
+
 jobs:
   test:
     name: Test (${{ matrix.platform }})
+    if: "${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}"
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -52,6 +65,7 @@ jobs:
 
   deny:
     name: cargo-deny
+    if: "${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
