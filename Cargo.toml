@@ -33,7 +33,7 @@ toml = "1"
 hjkl-config = "0.2"
 hjkl-form = { version = "0.3", features = ["crossterm"] }
 hjkl-ratatui = "0.3"
-hjkl-picker = "0.3"
+hjkl-picker = "0.5"
 hjkl-clipboard = "0.4"
 hjkl-splash = "0.2"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }

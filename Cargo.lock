@@ -1348,6 +1348,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-buffer"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22a56e4162c8cc2d4b040c7be2c21e4b09b0d3c09c731d750c873d88bfd0a3a0"
+dependencies = [
+ "ratatui",
+ "regex",
+ "unicode-width",
+]
+
+[[package]]
 name = "hjkl-clipboard"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1377,7 +1388,7 @@ checksum = "ce37f6a04fabdbc19665db83f6879f87d40dc1e51e0b779ecace216b21a2b0dc"
 dependencies = [
  "bitflags 2.11.1",
  "crossterm",
- "hjkl-buffer",
+ "hjkl-buffer 0.3.3",
  "ratatui",
  "regex",
  "thiserror 2.0.18",
@@ -1389,18 +1400,18 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05640cecfd86b4baeb16d2423d3d23ea4f8ed30bd74a3a9e29e65e2d285ca621"
 dependencies = [
- "hjkl-buffer",
+ "hjkl-buffer 0.3.3",
  "hjkl-engine",
 ]
 
 [[package]]
 name = "hjkl-picker"
-version = "0.3.2"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27d1f6fcb06622c85a697bc1c5d6b63965c651242c83c0bf163499f64c6d6c32"
+checksum = "f764e06474338ada8f1b72bf38434a1acd73035d7d5aea637b1b5fcd93e602d7"
 dependencies = [
  "crossterm",
- "hjkl-buffer",
+ "hjkl-buffer 0.6.0",
  "hjkl-form",
  "ignore",
  "ratatui",
