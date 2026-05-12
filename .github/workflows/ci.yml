@@ -64,12 +64,20 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --locked
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --workspace --locked --no-fail-fast
+      - run: cargo test --workspace --locked --doc
 
   build:
     name: Build ${{ matrix.target }}
     needs: [test]
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # Tag-gated: the cross-platform binary matrix runs only on v*.*.* tag
+    # pushes (the release pipeline) or manual workflow_dispatch. Its
+    # consumers (aur-bin / alpine / brew-tap) are already tag-gated, so
+    # building on every main push wastes the artifacts.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
