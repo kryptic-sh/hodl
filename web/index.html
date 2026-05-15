@@ -843,7 +843,18 @@
             </p>
           </div>
           <div class="feat">
-            <div class="icon">02 — RESTORE</div>
+            <div class="icon">02 — KEYRING</div>
+            <h4>Opt-in OS keyring unlock</h4>
+            <p>
+              Tick the keyring checkbox at create / restore (or pass
+              <code>--keyring</code>) and the vault password lives in Secret
+              Service / Keychain / Credential Manager. Lock screen tries
+              auto-unlock first; manual unlock self-heals a wiped entry.
+              <code>hodl keyring remove</code> opts out per wallet.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">03 — RESTORE</div>
             <h4>12 or 24 word seed</h4>
             <p>
               Standard BIP-39. Same mnemonic restores every supported chain.
@@ -851,7 +862,7 @@
             </p>
           </div>
           <div class="feat">
-            <div class="icon">03 — LIGHT</div>
+            <div class="icon">04 — LIGHT</div>
             <h4>No full node</h4>
             <p>
               Talks to Electrum servers, JSON-RPC endpoints, Monero LWS. No
@@ -860,15 +871,39 @@
             </p>
           </div>
           <div class="feat">
-            <div class="icon">04 — MULTI</div>
-            <h4>Multi-chain by default</h4>
+            <div class="icon">05 — TOFU</div>
+            <h4>TOFU cert pinning</h4>
             <p>
-              Bitcoin, Ethereum, BSC, Monero, NavCoin, plus the major Bitcoin
-              forks (LTC, DOGE, BCH). One binary. One seed. One keyboard.
+              First Electrum TLS connection pins the leaf SHA-256 in
+              <code>known_hosts.toml</code>; mismatches are fatal and surface in
+              a Trust new / Stay pinned / Abort overlay (defaults to Abort).
+              Daily smoke CI probes every default endpoint.
             </p>
           </div>
           <div class="feat">
-            <div class="icon">05 — TERMINAL</div>
+            <div class="icon">06 — MULTI</div>
+            <h4>Multi-chain · ERC-20 reads</h4>
+            <p>
+              Bitcoin, Ethereum, BSC, Monero, NavCoin, plus the major Bitcoin
+              forks (LTC, DOGE, BCH). EVM multi-account scan walks
+              <code>m/44'/60'/N'/0/0</code>; tagged ERC-20 tokens render under
+              each Ethereum / BSC account. One binary. One seed. One keyboard.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">07 — LOCK</div>
+            <h4>Lock screen quality-of-life</h4>
+            <p>
+              Auto-lock countdown ("auto-lock in NmNNs") below the keybind line
+              shifts yellow in the final 30 s. Normal-mode <kbd>1</kbd>–<kbd
+                >9</kbd
+              >
+              jumps straight to the Nth wallet — no overlay. Splash animates the
+              H-O-D-L letterforms at launch.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">08 — TERMINAL</div>
             <h4>ratatui-native</h4>
             <p>
               Truecolor TUI in any modern terminal. SSH-friendly. No Electron,
@@ -876,7 +911,7 @@
             </p>
           </div>
           <div class="feat">
-            <div class="icon">06 — PRIVACY</div>
+            <div class="icon">09 — PRIVACY</div>
             <h4>Zero telemetry</h4>
             <p>
               No analytics, no update pings, no crash reports. Tor passthrough
