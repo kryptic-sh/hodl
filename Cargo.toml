@@ -35,7 +35,7 @@ hjkl-form = { version = "0.3", features = ["crossterm"] }
 hjkl-ratatui = "0.3"
 hjkl-picker = "0.3"
 hjkl-clipboard = "0.4"
-hjkl-splash = "0.2"
+hjkl-splash = "0.27"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
 qrcode = "0.14"
 clap = { version = "4", features = ["derive"] }
