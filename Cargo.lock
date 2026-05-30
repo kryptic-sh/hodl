@@ -1359,9 +1359,9 @@ dependencies = [
 
 [[package]]
 name = "hjkl-config"
-version = "0.2.0"
+version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8d05b075482f17725d969c2d86f54e278fdd29f004d3f3d81723cc0be005a91"
+checksum = "eed80c017d97581d0428b0b819601fed210646fbbcdcd772d61d8df7de935050"
 dependencies = [
  "dirs",
  "serde",
