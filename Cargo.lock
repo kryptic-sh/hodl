@@ -1348,6 +1348,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-buffer"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc015974706a0895c46e5223a9bbef4b027445ec9c135072da9173b617971bfb"
+dependencies = [
+ "regex",
+ "unicode-width",
+]
+
+[[package]]
+name = "hjkl-buffer"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abbcb6a75bcf57991b3bf6604ba12e21ec14f0ca4de8a13f524a1f756407c78f"
+dependencies = [
+ "regex",
+ "unicode-width",
+]
+
+[[package]]
 name = "hjkl-clipboard"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1376,21 +1396,68 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce37f6a04fabdbc19665db83f6879f87d40dc1e51e0b779ecace216b21a2b0dc"
 dependencies = [
  "bitflags 2.11.1",
- "crossterm",
- "hjkl-buffer",
+ "hjkl-buffer 0.3.3",
  "ratatui",
  "regex",
  "thiserror 2.0.18",
 ]
 
 [[package]]
-name = "hjkl-form"
-version = "0.3.2"
+name = "hjkl-engine"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05640cecfd86b4baeb16d2423d3d23ea4f8ed30bd74a3a9e29e65e2d285ca621"
+checksum = "6eb6dd7ccc80c8782e88a8cc2a4eb7775ecc91d46f2d4806eb41b366f27136c7"
 dependencies = [
- "hjkl-buffer",
- "hjkl-engine",
+ "bitflags 2.11.1",
+ "crossterm",
+ "hjkl-buffer 0.6.2",
+ "regex",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "hjkl-engine"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "853953fb57862e8cfbf1287ad8d5f816a7d6f188d530779f22683d687a1cc619"
+dependencies = [
+ "bitflags 2.11.1",
+ "crossterm",
+ "hjkl-buffer 0.25.1",
+ "regex",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "hjkl-form"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2f2a058b1fd1eac92c74913a4703a61b6589982caa7ad4b8faff91e696c93e0"
+dependencies = [
+ "hjkl-buffer 0.6.2",
+ "hjkl-engine 0.7.0",
+ "hjkl-vim 0.19.0",
+]
+
+[[package]]
+name = "hjkl-form"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fce5da29f5ed76ec0a4318aef8bbde31de969a38471e0cdc232d5bc0c05b8400"
+dependencies = [
+ "hjkl-buffer 0.25.1",
+ "hjkl-engine 0.25.1",
+ "hjkl-vim 0.25.1",
+]
+
+[[package]]
+name = "hjkl-keymap"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "518249649aa8e743021dbbf684898c7d9e3b53dfc50a4189a70f09c34e9d8ed5"
+dependencies = [
+ "bitflags 2.11.1",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1400,8 +1467,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27d1f6fcb06622c85a697bc1c5d6b63965c651242c83c0bf163499f64c6d6c32"
 dependencies = [
  "crossterm",
- "hjkl-buffer",
- "hjkl-form",
+ "hjkl-buffer 0.3.3",
+ "hjkl-form 0.3.7",
  "ignore",
  "ratatui",
  "regex",
@@ -1414,8 +1481,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e68aec168ae29d9b8cf3ff9d13057e9d608223d7ce190b24b864f24b43d2e14f"
 dependencies = [
  "crossterm",
- "hjkl-engine",
- "hjkl-form",
+ "hjkl-engine 0.3.3",
+ "hjkl-form 0.3.7",
  "ratatui",
 ]
 
@@ -1424,6 +1491,28 @@ name = "hjkl-splash"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5561355a7c5fa5dcb1a688c090d7110ab1b427c714df0152cc9605df7fb27024"
+
+[[package]]
+name = "hjkl-vim"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42ecd781ed6f829da60b82ee11b459d9e57cff2959502a43a70a9efefd9d16b0"
+dependencies = [
+ "crossterm",
+ "hjkl-buffer 0.6.2",
+ "hjkl-engine 0.7.0",
+]
+
+[[package]]
+name = "hjkl-vim"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc8b8b157c5d61d3d8d64ec80bd14579d990f074f1a9d63a346673341146d7ca"
+dependencies = [
+ "hjkl-buffer 0.25.1",
+ "hjkl-engine 0.25.1",
+ "hjkl-keymap",
+]
 
 [[package]]
 name = "hkdf"
@@ -1546,7 +1635,7 @@ dependencies = [
  "bs58",
  "crossterm",
  "hjkl-clipboard",
- "hjkl-form",
+ "hjkl-form 0.25.1",
  "hjkl-picker",
  "hjkl-ratatui",
  "hjkl-splash",
