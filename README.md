@@ -6,7 +6,7 @@ Light crypto wallet. TUI. Rust + ratatui.
 [![Electrum Smoke](https://github.com/kryptic-sh/hodl/actions/workflows/smoke.yml/badge.svg)](https://github.com/kryptic-sh/hodl/actions/workflows/smoke.yml)
 [![release](https://img.shields.io/github/v/release/kryptic-sh/hodl)](https://github.com/kryptic-sh/hodl/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hodl.kryptic.sh-7ee787)](https://hodl.kryptic.sh)
+[![Website](https://img.shields.io/badge/website-kryptic.sh%2Fhodl-7ee787)](https://www.kryptic.sh/hodl/)
 
 ## Status
 
