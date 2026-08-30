@@ -8,6 +8,7 @@ members = [
     "crates/hodl-chain-bitcoin",
     "crates/hodl-chain-ethereum",
     "crates/hodl-chain-monero",
+    "crates/hodl-chain-navio",
     "apps/hodl",
     "xtask",
 ]
@@ -64,6 +65,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 k256 = { version = "0.13", features = ["arithmetic", "ecdsa"] }
 tiny-keccak = { version = "2", features = ["keccak"] }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+bls12_381 = "0.8"
+hmac = "0.12"
 base58-monero = "2"
 
 hodl-core = { path = "crates/hodl-core", version = "0.7" }
@@ -73,6 +76,7 @@ hodl-wallet = { path = "crates/hodl-wallet", version = "0.7" }
 hodl-chain-bitcoin = { path = "crates/hodl-chain-bitcoin", version = "0.7" }
 hodl-chain-ethereum = { path = "crates/hodl-chain-ethereum", version = "0.7" }
 hodl-chain-monero = { path = "crates/hodl-chain-monero", version = "0.7" }
+hodl-chain-navio = { path = "crates/hodl-chain-navio", version = "0.7" }
 
 [profile.release]
 lto = "thin"

@@ -10,7 +10,7 @@ pub enum ChainId {
     Litecoin,
     Dogecoin,
     BitcoinCash,
-    NavCoin,
+    Navio,
     Ethereum,
     BscMainnet,
     Monero,
@@ -24,8 +24,9 @@ impl ChainId {
             ChainId::Litecoin => 2,
             ChainId::Dogecoin => 3,
             ChainId::BitcoinCash => 145,
-            // NavCoin: SLIP-44 130 (NAV).
-            ChainId::NavCoin => 130,
+            // Navio: SLIP-44 130 (NAV), inherited from NavCoin. Navio's own
+            // BLSCT key tree uses 130 as its EIP-2333 branch index too.
+            ChainId::Navio => 130,
             ChainId::Ethereum => 60,
             // BSC reuses ETH derivation; coin_type 60 per BEP-44 convention
             ChainId::BscMainnet => 60,
@@ -40,7 +41,7 @@ impl ChainId {
             ChainId::Litecoin => "Litecoin",
             ChainId::Dogecoin => "Dogecoin",
             ChainId::BitcoinCash => "Bitcoin Cash",
-            ChainId::NavCoin => "NavCoin",
+            ChainId::Navio => "Navio",
             ChainId::Ethereum => "Ethereum",
             ChainId::BscMainnet => "BNB Smart Chain",
             ChainId::Monero => "Monero",
@@ -54,7 +55,7 @@ impl ChainId {
             ChainId::Litecoin => "LTC",
             ChainId::Dogecoin => "DOGE",
             ChainId::BitcoinCash => "BCH",
-            ChainId::NavCoin => "NAV",
+            ChainId::Navio => "NAV",
             ChainId::Ethereum => "ETH",
             ChainId::BscMainnet => "BNB",
             ChainId::Monero => "XMR",
@@ -69,7 +70,7 @@ impl ChainId {
             | ChainId::Litecoin
             | ChainId::Dogecoin
             | ChainId::BitcoinCash
-            | ChainId::NavCoin => 8,
+            | ChainId::Navio => 8,
             ChainId::Ethereum | ChainId::BscMainnet => 18,
             ChainId::Monero => 12,
         }
@@ -91,7 +92,7 @@ mod tests {
         assert_eq!(ChainId::Litecoin.decimals(), 8);
         assert_eq!(ChainId::Dogecoin.decimals(), 8);
         assert_eq!(ChainId::BitcoinCash.decimals(), 8);
-        assert_eq!(ChainId::NavCoin.decimals(), 8);
+        assert_eq!(ChainId::Navio.decimals(), 8);
     }
 
     #[test]

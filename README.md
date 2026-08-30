@@ -17,7 +17,7 @@ Roadmap tracked in [GitHub issues](https://github.com/kryptic-sh/hodl/issues).
 
 - Light wallet — no full-node sync, talk to public/self-hosted endpoints.
 - Terminal UI via [`ratatui`](https://crates.io/crates/ratatui).
-- Multi-chain: Bitcoin (+ testnet), Litecoin, Dogecoin, Bitcoin Cash, NavCoin,
+- Multi-chain: Bitcoin (+ testnet), Litecoin, Dogecoin, Bitcoin Cash, Navio,
   Ethereum, BNB Smart Chain, Monero. BIP-39 seed, BIP-32/44/49/84/86 derivation.
 - Local-only key storage, ChaCha20-Poly1305 vault under Argon2id. Never phones
   home.
@@ -34,6 +34,7 @@ hodl/
 │   ├── hodl-config/           # config + known_hosts loading (TOML)
 │   ├── hodl-wallet/           # vault, BIP-39, BIP-32 derivation, signing
 │   ├── hodl-chain-bitcoin/    # BTC + LTC + DOGE + BCH + NAV (Electrum)
+│   ├── hodl-chain-navio/      # NAV BLSCT keys + confidential addresses
 │   ├── hodl-chain-ethereum/   # ETH + BSC (JSON-RPC, EIP-1559)
 │   ├── hodl-chain-monero/     # XMR (LWS)
 │   └── hodl-tui/              # ratatui screens, input, layout

@@ -82,8 +82,11 @@ pub enum SendAction {
 /// Validate a recipient address for the given chain.
 ///
 /// Per chain:
-/// - BTC / BTC-testnet / LTC / NAV: bech32 segwit v0 (P2WPKH) preferred,
+/// - BTC / BTC-testnet / LTC / Navio: bech32 segwit v0 (P2WPKH) preferred,
 ///   legacy P2PKH base58check accepted as fallback.
+/// - Navio additionally rejects BLSCT (`nav1…`) addresses with a specific
+///   message: hodl can derive and display them but cannot yet build the
+///   confidential transaction that pays one.
 /// - DOGE: legacy P2PKH base58check only — DOGE never deployed bech32.
 /// - BCH: CashAddr (`bitcoincash:q…`) only — BCH replaced base58 P2PKH.
 /// - ETH / BSC: EIP-55 hex.
@@ -98,20 +101,19 @@ pub fn validate_recipient(s: &str, chain: ChainId) -> std::result::Result<(), St
     }
     use ChainId::*;
     match chain {
-        Bitcoin | BitcoinTestnet | Litecoin => {
-            // Try bech32 first (the wallet's preferred default).
-            if let Ok((_, ver, prog)) = bech32::segwit::decode(s)
-                && ver == bech32::segwit::VERSION_0
-                && prog.len() == 20
-            {
-                return Ok(());
+        Navio => {
+            if hodl_chain_navio::looks_like_address(hodl_chain_navio::MAINNET_HRP, s) {
+                return Err(
+                    "BLSCT (nav1…) recipients are not supported yet — hodl cannot build \
+                     confidential Navio transactions. Use a transparent nv1… address."
+                        .into(),
+                );
             }
-            // Fall back to legacy base58check P2PKH.
-            validate_base58_p2pkh(s)
+            validate_segwit_v0_or_p2pkh(s)
         }
-        // NavCoin and Dogecoin: legacy P2PKH only — bech32/segwit not
-        // deployed in upstream node software.
-        Dogecoin | NavCoin => validate_base58_p2pkh(s),
+        Bitcoin | BitcoinTestnet | Litecoin => validate_segwit_v0_or_p2pkh(s),
+        // Dogecoin: legacy P2PKH only — DOGE never deployed bech32.
+        Dogecoin => validate_base58_p2pkh(s),
         BitcoinCash => {
             if !s.starts_with("bitcoincash:") {
                 return Err("BCH recipient must be CashAddr (bitcoincash:q…)".into());
@@ -127,6 +129,18 @@ pub fn validate_recipient(s: &str, chain: ChainId) -> std::result::Result<(), St
             .map_err(|e| e.to_string()),
         Monero => Err("Monero send not implemented".into()),
     }
+}
+
+/// Accept a bech32 segwit v0 (P2WPKH) address, falling back to legacy
+/// base58check P2PKH.
+fn validate_segwit_v0_or_p2pkh(s: &str) -> std::result::Result<(), String> {
+    if let Ok((_, ver, prog)) = bech32::segwit::decode(s)
+        && ver == bech32::segwit::VERSION_0
+        && prog.len() == 20
+    {
+        return Ok(());
+    }
+    validate_base58_p2pkh(s)
 }
 
 /// Validate a base58check-encoded P2PKH address shape (21 bytes after decode).
@@ -928,7 +942,7 @@ fn recipient_placeholder(chain: ChainId) -> &'static str {
         Litecoin => "ltc1q…",
         Dogecoin => "D…",
         BitcoinCash => "bitcoincash:q…",
-        NavCoin => "N…",
+        Navio => "nv1q…",
         Ethereum | BscMainnet => "0x…",
         Monero => "4…",
     }
@@ -1451,6 +1465,58 @@ mod tests {
         // All-lowercase ETH address (no checksum required for all-lower).
         let addr = "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed";
         assert!(validate_recipient(addr, ChainId::Ethereum).is_ok());
+    }
+
+    #[test]
+    fn validate_recipient_accepts_navio_segwit() {
+        // m/84'/130'/0'/0/0 under NAVIO_MAINNET's "nv" HRP.
+        let seed = [0x42u8; 64];
+        let addr = hodl_chain_bitcoin::derive::derive_address(
+            &seed,
+            hodl_chain_bitcoin::derive::Purpose::Bip84,
+            &hodl_chain_bitcoin::NetworkParams::NAVIO_MAINNET,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+        assert!(
+            addr.starts_with("nv1"),
+            "expected an nv1 address, got {addr}"
+        );
+        assert!(validate_recipient(&addr, ChainId::Navio).is_ok());
+    }
+
+    #[test]
+    fn validate_recipient_accepts_navio_legacy() {
+        let seed = [0x42u8; 64];
+        let addr = hodl_chain_bitcoin::derive::derive_address(
+            &seed,
+            hodl_chain_bitcoin::derive::Purpose::Bip44,
+            &hodl_chain_bitcoin::NetworkParams::NAVIO_MAINNET,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+        assert!(validate_recipient(&addr, ChainId::Navio).is_ok());
+    }
+
+    /// A BLSCT address is well-formed but unspendable by this wallet, so the
+    /// rejection has to name the reason rather than read as "bad address".
+    #[test]
+    fn validate_recipient_rejects_navio_blsct_with_a_reason() {
+        let keys = hodl_chain_navio::BlsctKeys::from_bip39_seed(&[0x42u8; 64]);
+        let addr = hodl_chain_navio::encode_address(
+            hodl_chain_navio::MAINNET_HRP,
+            &keys.sub_address(0, 0),
+        )
+        .unwrap();
+        let err = validate_recipient(&addr, ChainId::Navio).unwrap_err();
+        assert!(
+            err.contains("BLSCT"),
+            "error should explain the BLSCT limitation; got: {err}"
+        );
     }
 
     #[test]

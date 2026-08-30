@@ -129,7 +129,7 @@ pub enum KdfPreset {
 ///
 /// `Config::default()` populates `chains` with curated public Electrum
 /// endpoints for the BTC family (BTC mainnet + testnet, BCH, LTC, DOGE,
-/// NAV). The wallet still does not phone home on its own — it only contacts
+/// Navio). The wallet still does not phone home on its own — it only contacts
 /// these servers when the user opens the accounts / receive / send screens.
 /// EVM (ETH/BSC) and Monero have no built-in defaults: EVM JSON-RPC needs
 /// per-user API keys (Infura/Alchemy/etc.), and Monero LWS leaks the view
@@ -144,10 +144,10 @@ pub enum KdfPreset {
 /// for that chain. Other chains keep their defaults independently.
 ///
 /// Example: writing only `[chains.bitcoin] endpoints = [...]` keeps DOGE,
-/// LTC, BCH, NAV, and BTC-testnet on their defaults; only BTC is replaced.
+/// LTC, BCH, Navio, and BTC-testnet on their defaults; only BTC is replaced.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_chains")]
     pub chains: HashMap<ChainId, ChainConfig>,
     #[serde(default)]
     pub tor: TorConfig,
@@ -245,16 +245,10 @@ fn default_chains() -> HashMap<ChainId, ChainConfig> {
             ssl("doge.aftrek.org", 50002),
         ]),
     );
-    m.insert(
-        ChainId::NavCoin,
-        cc(vec![
-            ssl("electrum.nav.community", 40002),
-            ssl("electrum1.nav.community", 40002),
-            ssl("electrum2.nav.community", 40002),
-            ssl("electrum3.nav.community", 40002),
-            ssl("electrum4.nav.community", 40002),
-        ]),
-    );
+    // Navio ElectrumX. nav-io/navio-electrum ships exactly one mainnet
+    // server (electrum/chains/mainnet/servers.json), which lists 50002 for
+    // TLS rather than the 40002 its DEFAULT_PORTS names.
+    m.insert(ChainId::Navio, cc(vec![ssl("electrum.nav.io", 50002)]));
     m
 }
 
@@ -303,6 +297,48 @@ impl Config {
     }
 }
 
+/// Chain keys that named a chain hodl used to support.
+///
+/// A key here is dropped with a warning instead of failing the load. `hodl`
+/// loads its config with `unwrap_or_default()`, so a hard parse error would
+/// silently discard every *other* setting the user has — their Tor toggle,
+/// lock timeout, KDF preset and custom endpoints — over one obsolete block.
+/// Any key that is neither current nor listed here is still an error, so a
+/// typo'd chain name is reported rather than quietly ignored.
+const LEGACY_CHAIN_KEYS: &[&str] = &[
+    // Removed in favour of `navio`. Its endpoints were NavCoin Electrum
+    // servers, which do not serve the Navio chain, so the block is dropped
+    // rather than carried over; `load`'s per-chain merge then supplies the
+    // curated Navio default.
+    "nav-coin",
+];
+
+/// Deserialize `[chains.*]`, dropping [`LEGACY_CHAIN_KEYS`].
+fn deserialize_chains<'de, D>(de: D) -> Result<HashMap<ChainId, ChainConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{Error as _, IntoDeserializer};
+
+    let raw: HashMap<String, ChainConfig> = HashMap::deserialize(de)?;
+    let mut out = HashMap::with_capacity(raw.len());
+    for (key, cc) in raw {
+        let parsed: Result<ChainId, serde::de::value::Error> =
+            ChainId::deserialize(key.as_str().into_deserializer());
+        match parsed {
+            Ok(id) => {
+                out.insert(id, cc);
+            }
+            Err(_) if LEGACY_CHAIN_KEYS.contains(&key.as_str()) => tracing::warn!(
+                "config: [chains.{key}] names a chain hodl no longer supports; \
+                 ignoring it"
+            ),
+            Err(e) => return Err(D::Error::custom(e)),
+        }
+    }
+    Ok(out)
+}
+
 /// Extract (1-based line, 1-based col, snippet) from a byte offset in `src`.
 fn locate(src: &str, offset: usize) -> (usize, usize, String) {
     let before = &src[..offset.min(src.len())];
@@ -337,7 +373,7 @@ mod tests {
             ChainId::Litecoin,
             ChainId::BitcoinCash,
             ChainId::Dogecoin,
-            ChainId::NavCoin,
+            ChainId::Navio,
         ] {
             let cc = cfg.chains.get(&chain).expect("chain in defaults");
             assert!(
@@ -415,13 +451,67 @@ tls = true
             ChainId::Litecoin,
             ChainId::BitcoinCash,
             ChainId::Dogecoin,
-            ChainId::NavCoin,
+            ChainId::Navio,
         ] {
             let cc = cfg.chains.get(&chain).expect("default preserved");
             assert!(
                 !cc.endpoints.is_empty(),
                 "{chain:?} default endpoints lost during merge"
             );
+        }
+    }
+
+    /// A config written before the NavCoin → Navio rename must not take the
+    /// user's other settings down with it.
+    #[test]
+    fn legacy_chain_key_is_dropped_not_fatal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+[tor]
+enabled = true
+socks5 = "socks5://127.0.0.1:9050"
+
+[chains.nav-coin]
+gap_limit = 7
+
+[[chains.nav-coin.endpoints]]
+kind = "electrum"
+url = "ssl://electrum.nav.community:40002"
+tls = true
+
+[chains.bitcoin]
+gap_limit = 50
+
+[[chains.bitcoin.endpoints]]
+kind = "electrum"
+url = "ssl://my-private-electrum.example:50002"
+tls = true
+"#,
+        )
+        .unwrap();
+
+        let cfg = Config::load(&path).expect("legacy chain key must not fail the load");
+
+        // Unrelated settings survive.
+        assert!(cfg.tor.enabled, "tor setting lost to the stale chain key");
+        let btc = cfg.chains.get(&ChainId::Bitcoin).expect("btc");
+        assert_eq!(btc.gap_limit, 50);
+
+        // Navio falls back to its curated default rather than inheriting the
+        // dead NavCoin endpoints.
+        let navio = cfg.chains.get(&ChainId::Navio).expect("navio default");
+        assert_eq!(navio.gap_limit, ChainConfig::default().gap_limit);
+        for ep in &navio.endpoints {
+            match ep {
+                Endpoint::Electrum { url, .. } => assert!(
+                    !url.contains("nav.community"),
+                    "Navio must not inherit NavCoin endpoints: {url}"
+                ),
+                other => panic!("expected Electrum endpoint, got {other:?}"),
+            }
         }
     }
 
@@ -481,6 +571,8 @@ endpoints = []
         assert_eq!(cfg, Config::default());
     }
 
+    /// A key that is neither current nor a known legacy name is still an
+    /// error — a typo must not be silently ignored.
     #[test]
     fn unknown_chain_key_errors() {
         let src = r#"

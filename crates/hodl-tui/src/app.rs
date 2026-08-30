@@ -472,7 +472,13 @@ impl App {
                                 (&self.screen, &self.unlocked)
                                 && let Some((addr, path)) = s.pick_receive(unlocked)
                             {
-                                self.screen = Screen::Receive(ReceiveState::new(addr, path));
+                                let chain = addr.chain();
+                                let mut receive = ReceiveState::new(addr, path);
+                                if chain == ChainId::Navio {
+                                    let (blsct, label) = navio_confidential_address(unlocked);
+                                    receive = receive.with_confidential(blsct, label);
+                                }
+                                self.screen = Screen::Receive(receive);
                             }
                         }
                         Some(AccountAction::OpenAddresses) => {
@@ -1062,4 +1068,24 @@ fn idle_timeout_from_config(config: &Config) -> Duration {
     } else {
         Duration::from_secs(secs)
     }
+}
+
+/// Derive the wallet's Navio BLSCT receiving sub-address.
+///
+/// Account 0, sub-address index 0 — the same destination navio-core hands out
+/// first for a fresh wallet. Returns the address and a provenance label for
+/// the receive screen.
+///
+/// The seed copy is zeroized before returning on every path (AGENTS.md).
+fn navio_confidential_address(wallet: &UnlockedWallet) -> (String, String) {
+    use zeroize::Zeroize;
+
+    let mut seed: [u8; 64] = *wallet.seed().as_bytes();
+    let keys = hodl_chain_navio::BlsctKeys::from_bip39_seed(&seed);
+    seed.zeroize();
+
+    let dpk = keys.sub_address(0, 0);
+    let addr = hodl_chain_navio::encode_address(hodl_chain_navio::MAINNET_HRP, &dpk)
+        .expect("a derived sub-address always encodes");
+    (addr, "BLSCT confidential • account 0, index 0".to_string())
 }

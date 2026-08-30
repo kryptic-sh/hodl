@@ -41,15 +41,14 @@ fn path_str(purpose: u32, coin: u32, account: u32, change: u32, index: u32) -> S
 /// | Litecoin    | Bip44, 49, 84             | MWEB is post-v1; no taproot on LTC   |
 /// | Dogecoin    | Bip44 only                | bech32/segwit not deployed on DOGE   |
 /// | BitcoinCash | Bip44, 49 (→ CashAddr)    | BIP-84/86 not deployed on BCH        |
-/// | NavCoin     | Bip44 only                | bech32/segwit not deployed in        |
-/// |             |                           | navcoin-core master/7.0.3            |
-/// |             |                           | (Bech32HRP() unimplemented)          |
+/// | Navio       | Bip44, 49, 84, 86         | segwit active from height 0 and      |
+/// |             |                           | taproot ALWAYS_ACTIVE in navio-core  |
 /// | others      | all (pass-through)        | Unknown derivative — no restriction  |
 fn validate_purpose(purpose: Purpose, params: &NetworkParams) -> Result<()> {
     let chain = params.chain_id;
     let ok = match chain {
         ChainId::Litecoin => matches!(purpose, Purpose::Bip44 | Purpose::Bip49 | Purpose::Bip84),
-        ChainId::Dogecoin | ChainId::NavCoin => matches!(purpose, Purpose::Bip44),
+        ChainId::Dogecoin => matches!(purpose, Purpose::Bip44),
         ChainId::BitcoinCash => matches!(purpose, Purpose::Bip44 | Purpose::Bip49),
         _ => true,
     };
@@ -339,16 +338,17 @@ mod tests {
         assert!(result.is_err(), "BIP-86 must be rejected on BCH");
     }
 
-    // --- NavCoin (NAV) tests ---
+    // --- Navio (NAV) tests ---
 
-    /// NAV P2PKH — m/44'/130'/0'/0/0 must start with "N" (0x35 prefix).
+    /// NAV P2PKH — m/44'/130'/0'/0/0 must start with "N" (0x35 prefix), the
+    /// verbyte nav-io/electrumx and nav-io/navio-electrum both use.
     #[test]
-    fn navcoin_p2pkh_prefix() {
+    fn navio_p2pkh_prefix() {
         let seed = seed_bytes();
         let addr = derive_address(
             &seed,
             Purpose::Bip44,
-            &NetworkParams::NAVCOIN_MAINNET,
+            &NetworkParams::NAVIO_MAINNET,
             0,
             0,
             0,
@@ -360,19 +360,27 @@ mod tests {
         );
     }
 
-    /// NAV does not support BIP-49 / BIP-84 / BIP-86 — bech32/segwit is
-    /// unimplemented in navcoin-core (verified against 7.0.3 + master:
-    /// `CChainParams::Bech32HRP()` has no implementation).
+    /// Navio has segwit from height 0 and taproot ALWAYS_ACTIVE, so every
+    /// purpose derives — under the "nv" HRP, not Bitcoin's "bc".
     #[test]
-    fn navcoin_segwit_purposes_rejected() {
+    fn navio_segwit_and_taproot_purposes_accepted() {
         let seed = seed_bytes();
         for purpose in [Purpose::Bip49, Purpose::Bip84, Purpose::Bip86] {
-            let result = derive_address(&seed, purpose, &NetworkParams::NAVCOIN_MAINNET, 0, 0, 0);
-            assert!(
-                result.is_err(),
-                "BIP-{} must be rejected on NAV (segwit not deployed)",
-                purpose.number()
-            );
+            let addr = derive_address(&seed, purpose, &NetworkParams::NAVIO_MAINNET, 0, 0, 0)
+                .unwrap_or_else(|e| panic!("BIP-{} must derive on NAV: {e}", purpose.number()));
+            match purpose {
+                // BIP-49 wraps segwit in P2SH: verbyte 0x55, which lands in
+                // base58's 'b' range for a 20-byte script hash.
+                Purpose::Bip49 => assert!(
+                    addr.starts_with('b'),
+                    "NAV BIP-49 must be a P2SH 'b' address, got {addr}"
+                ),
+                _ => assert!(
+                    addr.starts_with("nv1"),
+                    "NAV BIP-{} must use the 'nv' HRP, got {addr}",
+                    purpose.number()
+                ),
+            }
         }
     }
 }

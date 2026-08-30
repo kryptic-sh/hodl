@@ -8,10 +8,53 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Navio (NAV) support, replacing NavCoin. New `hodl-chain-navio` crate
+  implementing the BLSCT identity layer against nav-io/navio-core: EIP-2333
+  BLS12-381 key derivation, the Navio key tree
+  (`master → child(130) → transaction → view/spend`), stealth sub-address
+  derivation, and the modified-bech32 codec `nav1…` confidential addresses use.
+  Pinned by navio-core's own golden vectors — the ten mainnet addresses in
+  `blsct/wallet/keyman_tests.cpp` are reproduced byte for byte — plus the
+  published EIP-2333 test vectors.
+- Receive screen shows Navio's confidential (BLSCT) address alongside the
+  transparent one; `c` toggles between them and `y` copies whichever is shown.
+
 ### Changed
 
+- **Breaking:** `ChainId::NavCoin` is now `ChainId::Navio`. The config key
+  changes from `[chains.nav-coin]` to `[chains.navio]`. A config carrying the
+  old key now loads with that one block dropped and a warning, instead of
+  failing to parse — which, since `hodl` loads its config with
+  `unwrap_or_default()`, would have silently discarded every other setting in
+  the file. Navio then picks up its curated default. A chain key that is
+  neither current nor a known legacy name is still a hard error. Cached scan
+  entries are keyed on the `nav` ticker and carry over unchanged.
+- Navio transparent addresses use verbytes `0x35` / `0x55` and the `nv` segwit
+  HRP, following nav-io/electrumx and nav-io/navio-electrum. navio-core's
+  `chainparams.cpp` still carries Bitcoin's inherited `0` / `5` / `"bc"`, which
+  would make Navio addresses indistinguishable from Bitcoin's.
+- Navio derives BIP-44/49/84/86, defaulting to BIP-84 native segwit. Segwit is
+  active from height 0 and taproot is `ALWAYS_ACTIVE` on Navio, so the BIP-44
+  restriction NavCoin needed no longer applies.
+- Navio's `estimatefee` fallback is 1 sat/vByte, navio-core's minimum relay fee,
+  replacing NavCoin's 100 sat/vByte navcoin-js default.
+- Default Navio endpoint is `electrum.nav.io:50002` — the single mainnet server
+  nav-io/navio-electrum ships — replacing the `*.nav.community` list.
 - Pinned `mlugg/setup-zig` to zig 0.15.1 to skip `build.zig.zon` lookup and fix
   post-step CI noise.
+
+### Known limitations
+
+- Sending to a BLSCT (`nav1…`) recipient is rejected with an explanatory error:
+  building a confidential transaction needs Bulletproofs+ range proving,
+  set-membership proofs and BLS aggregate signing, none of which are
+  implemented. Balance and history cover Navio's transparent outputs only.
+- hodl's vault stores the stretched 64-byte BIP-39 seed, so BLSCT keys derive
+  from that (navio-core's mnemonic-with-passphrase path). A navio-core or
+  navio-electrum wallet restored from the same mnemonic with an _empty_
+  passphrase derives from the raw entropy and will show a different address.
 
 ## [0.7.1] - 2026-05-06
 

@@ -216,12 +216,13 @@ impl BitcoinChain {
 
     /// Returns the default derivation purpose for this chain's send path.
     ///
-    /// - Bip44 (legacy P2PKH) for DOGE, BCH, NAV — bech32/segwit not
-    ///   deployed in upstream node software.
-    /// - Bip84 (native segwit P2WPKH) for everything else in the BTC family.
+    /// - Bip44 (legacy P2PKH) for DOGE and BCH — bech32/segwit not deployed
+    ///   in upstream node software.
+    /// - Bip84 (native segwit P2WPKH) for everything else in the BTC family,
+    ///   Navio included: segwit is active from height 0 there.
     pub fn default_send_purpose(chain_id: ChainId) -> Purpose {
         match chain_id {
-            ChainId::Dogecoin | ChainId::BitcoinCash | ChainId::NavCoin => Purpose::Bip44,
+            ChainId::Dogecoin | ChainId::BitcoinCash => Purpose::Bip44,
             _ => Purpose::Bip84,
         }
     }
@@ -863,8 +864,11 @@ impl Chain for BitcoinChain {
 /// satoshis/vByte, applying a per-chain defensive fallback when the server
 /// returns ≤ 0 (bug, no data, or undefined behaviour).
 ///
-/// - **NavCoin**: falls back to 100 sat/vByte (navcoin-js hardcoded default of
-///   100,000 sat/kB).
+/// - **Navio**: falls back to its minimum relay fee, 1 sat/vByte
+///   (`DEFAULT_MIN_RELAY_TX_FEE = 1000` sat/kB in navio-core's `policy.h`).
+///   Navio's mainnet launched in 2026 and its mempool is thin enough that
+///   `estimatefee` can come back with no data; a zero-fee transaction would
+///   not relay, so fall back to the relay floor rather than fail the send.
 /// - **All other chains**: returns `Err` rather than silently broadcasting a
 ///   zero-fee transaction.
 fn apply_fee_fallback(btc_per_kb: f64, chain: ChainId) -> Result<u64> {
@@ -875,14 +879,14 @@ fn apply_fee_fallback(btc_per_kb: f64, chain: ChainId) -> Result<u64> {
         // Server returned ≤ 0 (bug, no data, or rejected). Per-chain
         // defensive fallback or hard error.
         match chain {
-            ChainId::NavCoin => {
-                // navcoin-js convention: 100_000 sat/kB = 100 sat/vByte.
+            ChainId::Navio => {
+                // navio-core policy.h: 1000 sat/kB = 1 sat/vByte.
                 tracing::warn!(
-                    "{}: estimatefee returned {} (≤ 0); falling back to 100 sat/vByte (navcoin-js default)",
+                    "{}: estimatefee returned {} (<= 0); falling back to 1 sat/vByte (navio-core min relay fee)",
                     chain.display_name(),
                     btc_per_kb,
                 );
-                Ok(100)
+                Ok(1)
             }
             other => Err(Error::Chain(format!(
                 "{}: estimatefee returned {} — no canonical fallback for this chain; refusing zero-fee broadcast",
@@ -1078,8 +1082,8 @@ mod chain_tests {
             Purpose::Bip84
         );
         assert_eq!(
-            BitcoinChain::default_send_purpose(ChainId::NavCoin),
-            Purpose::Bip44
+            BitcoinChain::default_send_purpose(ChainId::Navio),
+            Purpose::Bip84
         );
         assert_eq!(
             BitcoinChain::default_send_purpose(ChainId::Dogecoin),
@@ -1248,26 +1252,21 @@ mod chain_tests {
 
     // ── apply_fee_fallback unit tests ────────────────────────────────────────
 
-    /// NavCoin: server returns 0.0 → defensive fallback of 100 sat/vByte.
+    /// Navio: server returns 0.0 → defensive fallback of 1 sat/vByte.
     #[test]
     fn nav_fee_fallback_on_zero() {
-        let result = apply_fee_fallback(0.0, ChainId::NavCoin).unwrap();
-        assert_eq!(
-            result, 100,
-            "NavCoin zero-fee fallback should be 100 sat/vByte"
-        );
+        let result = apply_fee_fallback(0.0, ChainId::Navio).unwrap();
+        assert_eq!(result, 1, "Navio zero-fee fallback should be 1 sat/vByte");
     }
 
-    /// NavCoin: normal path (0.00001 BTC/kB = 1000 sat/kB = 1 sat/vByte → ceil = 1).
-    /// Use a value that gives 10 sat/vByte: 0.0001 BTC/kB = 10,000 sat/kB = 10 sat/vByte.
+    /// Navio: normal path. 0.0001 BTC/kB = 10,000 sat/kB = 10 sat/vByte.
     #[test]
     fn nav_fee_normal_path() {
-        // 0.0001 BTC/kB × 1e8 / 1000 = 10,000 sat/kB / 1000 = 10 sat/vByte
-        let result = apply_fee_fallback(0.0001, ChainId::NavCoin).unwrap();
+        let result = apply_fee_fallback(0.0001, ChainId::Navio).unwrap();
         assert_eq!(result, 10, "0.0001 BTC/kB should yield 10 sat/vByte");
     }
 
-    /// Non-NavCoin chains: server returns ≤ 0 → hard error, no zero-fee broadcast.
+    /// Non-Navio chains: server returns <= 0 → hard error, no zero-fee broadcast.
     #[test]
     fn non_nav_zero_returns_error() {
         let err = apply_fee_fallback(0.0, ChainId::Bitcoin).unwrap_err();

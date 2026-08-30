@@ -17,11 +17,9 @@ use hodl_chain_bitcoin::electrum::ElectrumClient;
 fn main() {
     let mut exit_code = 0;
 
-    for (host, port) in [
-        ("electrum3.nav.community", 40002),
-        ("electrum2.nav.community", 40002),
-        ("electrum.nav.community", 40002),
-    ] {
+    // Navio ElectrumX. nav-io/navio-electrum ships this as its only mainnet
+    // server; the 40002 in its DEFAULT_PORTS is not what servers.json lists.
+    for (host, port) in [("electrum.nav.io", 50002)] {
         // Pass `pinned = None` → always acts as first connect (TOFU pin).
         match ElectrumClient::connect_tls(host, port, None) {
             Ok((mut c, new_fp)) => {
