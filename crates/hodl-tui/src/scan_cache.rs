@@ -111,7 +111,7 @@ impl ScanCache {
             let chain = match chain_from_slug(stem) {
                 Some(c) => c,
                 None => {
-                    debug!("scan cache: skipping unknown ticker {stem:?}");
+                    debug!("scan cache: skipping unrecognised cache file {stem:?}");
                     continue;
                 }
             };
@@ -191,23 +191,21 @@ impl Drop for ScanCache {
 /// NavCoin, the chain hodl used to support, but it is a different blockchain
 /// with different derivation paths and address encodings. A `nav.cache` left
 /// behind by an older install holds NavCoin addresses and NavCoin balances, so
-/// giving Navio its own stem retires that file instead of hydrating it — the
-/// unknown stem is skipped by `hydrate_from_disk` and Navio starts from a
-/// clean scan.
+/// giving Navio its own stem leaves that file unread — `hydrate_from_disk`
+/// skips an unrecognised stem, so Navio starts from a clean scan. The stale
+/// file is not deleted; it is encrypted and inert, and removing a user's data
+/// is not this function's call.
 fn cache_slug(chain: ChainId) -> &'static str {
     match chain {
+        ChainId::Bitcoin => "btc",
+        ChainId::BitcoinTestnet => "tbtc",
+        ChainId::Litecoin => "ltc",
+        ChainId::Dogecoin => "doge",
+        ChainId::BitcoinCash => "bch",
         ChainId::Navio => "navio",
-        other => match other {
-            ChainId::Bitcoin => "btc",
-            ChainId::BitcoinTestnet => "tbtc",
-            ChainId::Litecoin => "ltc",
-            ChainId::Dogecoin => "doge",
-            ChainId::BitcoinCash => "bch",
-            ChainId::Ethereum => "eth",
-            ChainId::BscMainnet => "bnb",
-            ChainId::Monero => "xmr",
-            ChainId::Navio => unreachable!("handled above"),
-        },
+        ChainId::Ethereum => "eth",
+        ChainId::BscMainnet => "bnb",
+        ChainId::Monero => "xmr",
     }
 }
 

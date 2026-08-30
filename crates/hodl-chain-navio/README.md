@@ -86,5 +86,3 @@ the spending key and a 16-bit view tag, so a wallet tests ownership with one
 G1 scalar multiplication per output (`nonce = blindingKey * viewKey`) before
 fetching anything.
 
-[`BlsctKeys::from_bip39_entropy`]: keys::BlsctKeys::from_bip39_entropy
-[`BlsctKeys::from_bip39_seed`]: keys::BlsctKeys::from_bip39_seed

@@ -95,7 +95,11 @@ impl NetworkParams {
     /// (the same two, plus `SEGWIT_HRP = "nv"`) — and navio-core's own
     /// `delegation_tests.cpp` uses an `nv1…` placeholder. We follow those.
     ///
-    /// Endpoints: Navio ElectrumX, default ports 40001 / 40002.
+    /// Endpoints: Navio ElectrumX. The ports below are the documented
+    /// defaults (and navio-electrum's `DEFAULT_PORTS`), but the one public
+    /// mainnet server its `servers.json` lists answers on 50002 -- which is
+    /// what the curated config endpoint uses. These two fields have no
+    /// readers today; endpoints carry explicit ports.
     ///
     /// Note this covers Navio's *transparent* outputs only. Confidential
     /// (BLSCT) addresses are a different encoding entirely and live in

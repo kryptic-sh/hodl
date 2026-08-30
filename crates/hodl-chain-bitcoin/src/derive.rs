@@ -375,11 +375,19 @@ mod tests {
                     addr.starts_with('b'),
                     "NAV BIP-49 must be a P2SH 'b' address, got {addr}"
                 ),
-                _ => assert!(
-                    addr.starts_with("nv1"),
-                    "NAV BIP-{} must use the 'nv' HRP, got {addr}",
-                    purpose.number()
+                // Witness v0 and v1 both render as "nv1"; the character
+                // after the separator is what distinguishes them ('q' = v0,
+                // 'p' = v1), so assert on that or the taproot case is
+                // untested.
+                Purpose::Bip84 => assert!(
+                    addr.starts_with("nv1q"),
+                    "NAV BIP-84 must be a witness-v0 'nv1q' address, got {addr}"
                 ),
+                Purpose::Bip86 => assert!(
+                    addr.starts_with("nv1p"),
+                    "NAV BIP-86 must be a witness-v1 'nv1p' address, got {addr}"
+                ),
+                Purpose::Bip44 => unreachable!("not in the loop"),
             }
         }
     }

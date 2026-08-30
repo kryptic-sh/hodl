@@ -19,9 +19,13 @@ use crate::psbt::{
 
 /// Decode a recipient address string to a scriptPubKey for the given purpose.
 ///
-/// - Bip84 / Bip86: bech32 P2WPKH.
+/// The recipient's script type is independent of the wallet's own purpose --
+/// a segwit wallet pays a legacy address perfectly well -- so the segwit
+/// arms accept a base58 recipient too.
+///
+/// - Bip84 / Bip86: bech32 P2WPKH, or legacy base58 P2PKH / P2SH.
 /// - Bip44: base58check P2PKH or CashAddr P2PKH for BCH.
-/// - Bip49: returns an error (not yet implemented).
+/// - Bip49: base58check P2SH.
 fn decode_address_to_script(
     addr: &str,
     purpose: Purpose,
@@ -29,11 +33,15 @@ fn decode_address_to_script(
 ) -> Result<Vec<u8>> {
     match purpose {
         Purpose::Bip84 | Purpose::Bip86 => {
-            // Both the HRP and the witness-program shape are checked inside
-            // `decode_p2wpkh_address`; the HRP is what pins the address to
-            // this chain.
-            let hash = decode_p2wpkh_address(addr, params.bech32_hrp)?;
-            Ok(p2wpkh_script(&hash))
+            // Decide by shape, not by trying each codec in turn: falling
+            // through to base58 would answer a wrong-chain bech32 address
+            // with a confusing base58 parse error.
+            if bech32::segwit::decode(addr).is_ok() {
+                let hash = decode_p2wpkh_address(addr, params.bech32_hrp)?;
+                return Ok(p2wpkh_script(&hash));
+            }
+            // Not bech32: a legacy recipient.
+            base58_recipient_script(addr, params)
         }
         Purpose::Bip44 => {
             // CashAddr (BCH): contains a colon and uses the chain's HRP.
@@ -73,27 +81,39 @@ fn decode_address_to_script(
             h160.copy_from_slice(&decoded[1..]);
             Ok(p2pkh_script(&h160))
         }
-        Purpose::Bip49 => {
-            // P2SH-P2WPKH recipient address: base58check with p2sh_prefix.
-            let decoded = bs58::decode(addr)
-                .with_check(None)
-                .into_vec()
-                .map_err(|e| Error::Codec(format!("base58 decode: {e}")))?;
-            if decoded.len() != 21 {
-                return Err(Error::Codec("P2SH address must decode to 21 bytes".into()));
-            }
-            if decoded[0] != params.p2sh_prefix {
-                return Err(Error::Codec(format!(
-                    "address version byte 0x{:02x} does not match {} P2SH (expected 0x{:02x})",
-                    decoded[0],
-                    params.chain_id.display_name(),
-                    params.p2sh_prefix
-                )));
-            }
-            let mut script_hash = [0u8; 20];
-            script_hash.copy_from_slice(&decoded[1..]);
-            Ok(p2sh_script(&script_hash))
-        }
+        Purpose::Bip49 => base58_recipient_script(addr, params),
+    }
+}
+
+/// Decode a base58check recipient into its scriptPubKey.
+///
+/// The version byte selects P2PKH or P2SH and is checked against this chain's
+/// prefixes: sending DOGE to a BTC address (or NAV to a DOGE one) would
+/// otherwise silently encode the wrong scriptPubKey and lose the funds.
+fn base58_recipient_script(addr: &str, params: &NetworkParams) -> Result<Vec<u8>> {
+    let decoded = bs58::decode(addr)
+        .with_check(None)
+        .into_vec()
+        .map_err(|e| Error::Codec(format!("base58 decode: {e}")))?;
+    if decoded.len() != 21 {
+        return Err(Error::Codec(
+            "base58 address must decode to 21 bytes".into(),
+        ));
+    }
+    let mut hash = [0u8; 20];
+    hash.copy_from_slice(&decoded[1..]);
+    if decoded[0] == params.p2pkh_prefix {
+        Ok(p2pkh_script(&hash))
+    } else if decoded[0] == params.p2sh_prefix {
+        Ok(p2sh_script(&hash))
+    } else {
+        Err(Error::Codec(format!(
+            "address version byte 0x{:02x} does not match {} (expected 0x{:02x} P2PKH or 0x{:02x} P2SH)",
+            decoded[0],
+            params.chain_id.display_name(),
+            params.p2pkh_prefix,
+            params.p2sh_prefix
+        )))
     }
 }
 
@@ -230,6 +250,11 @@ impl BitcoinChain {
     /// Compute the Electrum scripthash for an address string.
     ///
     /// Supports bech32 P2WPKH, legacy P2PKH (base58check), and CashAddr P2PKH.
+    ///
+    /// Unlike `decode_address_to_script` this does not check the HRP or
+    /// version byte against the chain: every caller passes an address this
+    /// wallet derived itself, and a scripthash query leaks nothing and moves
+    /// no funds. Do not reuse it for user-supplied addresses.
     fn scripthash_for(&self, addr: &Address) -> Result<String> {
         let s = addr.as_str();
 
@@ -1144,11 +1169,74 @@ mod chain_tests {
             0,
         )
         .unwrap();
-        let result =
-            decode_address_to_script(&nav_addr, Purpose::Bip84, &NetworkParams::BITCOIN_MAINNET);
+        let err =
+            decode_address_to_script(&nav_addr, Purpose::Bip84, &NetworkParams::BITCOIN_MAINNET)
+                .expect_err("an nv1 address must not be spendable on Bitcoin");
         assert!(
-            result.is_err(),
-            "an nv1 address must not be spendable on Bitcoin"
+            err.to_string().contains("HRP"),
+            "error should name the HRP mismatch; got: {err}"
+        );
+    }
+
+    /// A legacy recipient must be payable from a segwit wallet: the
+    /// recipient's script type has nothing to do with the sender's keys.
+    /// Navio defaults to BIP-84, so without this an `N…` address pasted from
+    /// a NavCoin-era address book would validate in the send form and then
+    /// die with a bech32 parse error after the user entered an amount.
+    #[test]
+    fn segwit_wallet_pays_a_legacy_recipient() {
+        let seed = [0x42u8; 64];
+        let nav_legacy = crate::derive::derive_address(
+            &seed,
+            Purpose::Bip44,
+            &NetworkParams::NAVIO_MAINNET,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+        assert!(nav_legacy.starts_with('N'));
+        let script =
+            decode_address_to_script(&nav_legacy, Purpose::Bip84, &NetworkParams::NAVIO_MAINNET)
+                .expect("a legacy NAV recipient must be payable from a BIP-84 wallet");
+        // P2PKH: OP_DUP OP_HASH160 <20> … OP_EQUALVERIFY OP_CHECKSIG
+        assert_eq!(script.len(), 25);
+        assert_eq!(&script[..3], &[0x76, 0xa9, 0x14]);
+    }
+
+    /// The same, for the BIP-49 "b…" P2SH form.
+    #[test]
+    fn segwit_wallet_pays_a_p2sh_recipient() {
+        let seed = [0x42u8; 64];
+        let nav_p2sh = crate::derive::derive_address(
+            &seed,
+            Purpose::Bip49,
+            &NetworkParams::NAVIO_MAINNET,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+        let script =
+            decode_address_to_script(&nav_p2sh, Purpose::Bip84, &NetworkParams::NAVIO_MAINNET)
+                .expect("a P2SH NAV recipient must be payable");
+        // P2SH: OP_HASH160 <20> … OP_EQUAL
+        assert_eq!(script.len(), 23);
+        assert_eq!(&script[..2], &[0xa9, 0x14]);
+        assert_eq!(script[22], 0x87);
+    }
+
+    /// A base58 address for another chain is still refused on the segwit
+    /// path, by its version byte.
+    #[test]
+    fn segwit_wallet_rejects_a_foreign_legacy_recipient() {
+        let btc_legacy = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
+        let err =
+            decode_address_to_script(btc_legacy, Purpose::Bip84, &NetworkParams::NAVIO_MAINNET)
+                .expect_err("a BTC legacy address must not be payable on Navio");
+        assert!(
+            err.to_string().contains("version byte"),
+            "error should name the version byte; got: {err}"
         );
     }
 

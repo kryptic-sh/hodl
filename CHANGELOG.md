@@ -21,13 +21,26 @@ and this project adheres to
 
 ### Fixed
 
-- Bech32 recipient addresses are now checked against the chain's HRP before a
-  script is built. `decode_p2wpkh_address` discarded the HRP, so a `bc1q…`
-  pasted into the Navio send form (or an `nv1q…` into Bitcoin's) encoded a
-  valid scriptPubKey and the send went out on the wrong chain. The legacy
-  base58 path had always checked its version byte for exactly this reason; the
-  segwit path now matches it, and the send screen rejects the mismatch up front.
-  This also closes the same hole between BTC and LTC.
+- Recipient addresses are now checked for chain identity on every path.
+  `decode_p2wpkh_address` discarded the bech32 HRP, so a `bc1q…` pasted into
+  the Navio send form (or an `nv1q…` into Bitcoin's) encoded a valid
+  scriptPubKey and the send went out on the wrong chain. The send screen only
+  checked the base58 shape, never the version byte, so a `1…` or `D…` passed
+  there too. Both are now checked at the front door and again at signing time.
+  This also closes the same holes between BTC, LTC and DOGE.
+- A segwit wallet can pay a legacy recipient again. `decode_address_to_script`
+  keyed the recipient's script type off the _wallet's_ purpose, so a BIP-84
+  wallet — which is now Navio's default, and already was Bitcoin's and
+  Litecoin's — rejected every base58 address with a bech32 parse error after
+  the user had entered an amount, even though the send form accepted it. The
+  recipient's script type has nothing to do with the sender's keys.
+- An address book containing a contact on a retired chain no longer loads as
+  empty. `AddressBook::load` is consumed with `unwrap_or_default()` and the
+  address-book screen writes the whole struct back, so one `chain =
+"nav-coin"` entry would have blanked the book on open and destroyed every
+  other contact on the next edit. The stale entry is dropped, the rest kept,
+  and a book that genuinely fails to parse no longer opens at all — it can't
+  be overwritten by an edit.
 
 ### Changed
 

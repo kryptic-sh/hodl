@@ -37,6 +37,7 @@ use hjkl_form::{
 };
 use hjkl_picker::{PickerAction, PickerEvent, PickerLogic};
 use hjkl_ratatui::form::{FormPalette, draw_form};
+use hodl_chain_bitcoin::NetworkParams as BtcNetworkParams;
 use hodl_config::{AddressBook, Config, Contact, KnownHosts};
 use hodl_core::{Address, Amount, ChainId, FeeRate};
 use ratatui::Terminal;
@@ -109,13 +110,13 @@ pub fn validate_recipient(s: &str, chain: ChainId) -> std::result::Result<(), St
                         .into(),
                 );
             }
-            validate_segwit_v0_or_p2pkh(s, "nv")
+            validate_for_chain(s, &BtcNetworkParams::NAVIO_MAINNET)
         }
-        Bitcoin => validate_segwit_v0_or_p2pkh(s, "bc"),
-        BitcoinTestnet => validate_segwit_v0_or_p2pkh(s, "tb"),
-        Litecoin => validate_segwit_v0_or_p2pkh(s, "ltc"),
+        Bitcoin => validate_for_chain(s, &BtcNetworkParams::BITCOIN_MAINNET),
+        BitcoinTestnet => validate_for_chain(s, &BtcNetworkParams::BITCOIN_TESTNET),
+        Litecoin => validate_for_chain(s, &BtcNetworkParams::LITECOIN_MAINNET),
         // Dogecoin: legacy P2PKH only — DOGE never deployed bech32.
-        Dogecoin => validate_base58_p2pkh(s),
+        Dogecoin => validate_base58_for_chain(s, &BtcNetworkParams::DOGECOIN_MAINNET),
         BitcoinCash => {
             if !s.starts_with("bitcoincash:") {
                 return Err("BCH recipient must be CashAddr (bitcoincash:q…)".into());
@@ -133,35 +134,50 @@ pub fn validate_recipient(s: &str, chain: ChainId) -> std::result::Result<(), St
     }
 }
 
-/// Accept a bech32 segwit v0 (P2WPKH) address whose HRP matches this chain,
-/// falling back to legacy base58check P2PKH.
+/// Accept an address for `params`' chain: bech32 segwit v0, or legacy
+/// base58check P2PKH / P2SH.
 ///
-/// The HRP check is what keeps a `bc1q…` out of the Navio send form (and an
-/// `nv1q…` out of Bitcoin's): the witness program alone carries no chain
-/// identity, so both would otherwise encode a valid script on the wrong chain.
-/// `decode_p2wpkh_address` enforces the same rule at signing time; this is the
-/// front door, so the user is told before they fill in an amount.
-fn validate_segwit_v0_or_p2pkh(s: &str, hrp: &str) -> std::result::Result<(), String> {
+/// Both halves check chain identity — the bech32 HRP, or the base58 version
+/// byte — mirroring `decode_address_to_script`, which enforces the same rules
+/// at signing time. This is the front door, so the user hears about a
+/// wrong-chain address before filling in an amount rather than after.
+fn validate_for_chain(s: &str, params: &BtcNetworkParams) -> std::result::Result<(), String> {
     if let Ok((got_hrp, ver, prog)) = bech32::segwit::decode(s) {
-        if !got_hrp.as_str().eq_ignore_ascii_case(hrp) {
+        if !got_hrp.as_str().eq_ignore_ascii_case(params.bech32_hrp) {
             return Err(format!(
-                "address is for another chain (prefix '{}', expected '{hrp}')",
-                got_hrp.as_str()
+                "address is for another chain (prefix '{}', expected '{}')",
+                got_hrp.as_str(),
+                params.bech32_hrp
             ));
         }
-        if ver == bech32::segwit::VERSION_0 && prog.len() == 20 {
-            return Ok(());
-        }
+        return if ver == bech32::segwit::VERSION_0 && prog.len() == 20 {
+            Ok(())
+        } else {
+            Err("address is not a P2WPKH bech32 (witness v0, 20-byte program)".into())
+        };
     }
-    validate_base58_p2pkh(s)
+    validate_base58_for_chain(s, params)
 }
 
-/// Validate a base58check-encoded P2PKH address shape (21 bytes after decode).
-///
-/// Doesn't verify the version byte against any specific chain — that check
-/// happens at the chain crate's `decode_address_to_script` boundary, which
-/// has access to the chain's expected `p2pkh_prefix`.
-fn validate_base58_p2pkh(s: &str) -> std::result::Result<(), String> {
+/// Validate a base58check address against this chain's P2PKH / P2SH version
+/// bytes.
+fn validate_base58_for_chain(
+    s: &str,
+    params: &BtcNetworkParams,
+) -> std::result::Result<(), String> {
+    let decoded = validate_base58_shape(s)?;
+    if decoded[0] == params.p2pkh_prefix || decoded[0] == params.p2sh_prefix {
+        Ok(())
+    } else {
+        Err(format!(
+            "address is for another chain (version byte 0x{:02x}, expected 0x{:02x} or 0x{:02x})",
+            decoded[0], params.p2pkh_prefix, params.p2sh_prefix
+        ))
+    }
+}
+
+/// Validate a base58check-encoded address shape (21 bytes after decode).
+fn validate_base58_shape(s: &str) -> std::result::Result<Vec<u8>, String> {
     let decoded = bs58::decode(s)
         .with_check(None)
         .into_vec()
@@ -172,7 +188,7 @@ fn validate_base58_p2pkh(s: &str) -> std::result::Result<(), String> {
             decoded.len()
         ));
     }
-    Ok(())
+    Ok(decoded)
 }
 
 /// Validate an amount string: positive decimal number of BTC.
@@ -1498,6 +1514,26 @@ mod tests {
             "expected an nv1 address, got {addr}"
         );
         assert!(validate_recipient(&addr, ChainId::Navio).is_ok());
+    }
+
+    /// A Bitcoin legacy address must not pass the Navio form either. The
+    /// bech32 half of the guard does not cover base58, so this is a separate
+    /// path from `validate_recipient_rejects_btc_address_on_navio`.
+    #[test]
+    fn validate_recipient_rejects_btc_legacy_on_navio() {
+        let err =
+            validate_recipient("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", ChainId::Navio).unwrap_err();
+        assert!(
+            err.contains("another chain"),
+            "error should say it's the wrong chain; got: {err}"
+        );
+    }
+
+    /// And a Dogecoin address on Navio: both are base58 P2PKH, so only the
+    /// version byte separates them.
+    #[test]
+    fn validate_recipient_rejects_doge_legacy_on_navio() {
+        assert!(validate_recipient("DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L", ChainId::Navio).is_err());
     }
 
     #[test]

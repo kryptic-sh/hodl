@@ -305,7 +305,7 @@ impl Config {
 /// lock timeout, KDF preset and custom endpoints — over one obsolete block.
 /// Any key that is neither current nor listed here is still an error, so a
 /// typo'd chain name is reported rather than quietly ignored.
-const LEGACY_CHAIN_KEYS: &[&str] = &[
+pub(crate) const LEGACY_CHAIN_KEYS: &[&str] = &[
     // Removed in favour of `navio`. Its endpoints were NavCoin Electrum
     // servers, which do not serve the Navio chain, so the block is dropped
     // rather than carried over; `load`'s per-chain merge then supplies the
