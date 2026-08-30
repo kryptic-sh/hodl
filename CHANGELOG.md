@@ -44,6 +44,7 @@ and this project adheres to
   nav-io/navio-electrum ships — replacing the `*.nav.community` list.
 - Pinned `mlugg/setup-zig` to zig 0.15.1 to skip `build.zig.zon` lookup and fix
   post-step CI noise.
+- Bumped `crossbeam-epoch` 0.9.18 → 0.9.20 for RUSTSEC-2026-0204.
 
 ### Known limitations
 
