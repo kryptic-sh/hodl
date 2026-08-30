@@ -90,7 +90,7 @@ fn parent_sk_to_lamport_pk(parent_sk: &Scalar, index: u32) -> [u8; DIGEST_SIZE] 
 
     for source in [&ikm, &not_ikm] {
         ikm_to_lamport_sk(source, &salt, &mut lamport);
-        for chunk in lamport.chunks_exact(DIGEST_SIZE) {
+        for chunk in lamport.as_chunks::<DIGEST_SIZE>().0 {
             hasher.update(Sha256::digest(chunk));
         }
     }
