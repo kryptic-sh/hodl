@@ -65,7 +65,7 @@ impl ActiveChain {
             | ChainId::Litecoin
             | ChainId::Dogecoin
             | ChainId::BitcoinCash
-            | ChainId::NavCoin => {
+            | ChainId::Navio => {
                 let params = btc_network_params(id);
                 let chain_cfg = config.chains.get(&id).cloned().unwrap_or_default();
                 let endpoints: Vec<&Endpoint> = chain_cfg
@@ -269,7 +269,7 @@ fn btc_network_params(id: ChainId) -> BtcNetworkParams {
         ChainId::Litecoin => BtcNetworkParams::LITECOIN_MAINNET,
         ChainId::Dogecoin => BtcNetworkParams::DOGECOIN_MAINNET,
         ChainId::BitcoinCash => BtcNetworkParams::BITCOIN_CASH_MAINNET,
-        ChainId::NavCoin => BtcNetworkParams::NAVCOIN_MAINNET,
+        ChainId::Navio => BtcNetworkParams::NAVIO_MAINNET,
         _ => unreachable!("non-Bitcoin chain passed to btc_network_params"),
     }
 }
@@ -398,11 +398,10 @@ pub fn electrum_connect(
         (_, None) => ElectrumClient::connect_tcp(host, port)?,
     };
 
-    // Negotiate protocol 1.4 explicitly. Without this the NavCoin
-    // electrumx fork defaults to ambient (1.5-style) responses that
-    // don't match our flat-array deserialisation for
-    // blockchain.scripthash.get_history. Verified against
-    // electrum3.nav.community: 1.4 negotiation → standard responses.
+    // Negotiate protocol 1.4 explicitly. Without this the nav-io electrumx
+    // fork defaults to ambient (1.5-style) responses that don't match our
+    // flat-array deserialisation for blockchain.scripthash.get_history.
+    // nav-io/navio-electrum pins "1.4" for its own mainnet server too.
     let (server_id, _proto) = client.server_version("hodl", "1.4")?;
     tracing::debug!("electrum connected: {url} → {server_id}");
 

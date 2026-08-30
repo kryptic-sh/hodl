@@ -95,9 +95,21 @@ pub fn p2sh_script(script_hash: &[u8; 20]) -> Vec<u8> {
 }
 
 /// Decode a bech32 P2WPKH address string to its 20-byte pubkey hash.
-pub fn decode_p2wpkh_address(addr: &str) -> Result<[u8; 20]> {
-    let (_, witness_ver, prog) =
+pub fn decode_p2wpkh_address(addr: &str, expected_hrp: &str) -> Result<[u8; 20]> {
+    let (hrp, witness_ver, prog) =
         bech32::segwit::decode(addr).map_err(|e| Error::Codec(format!("bech32 decode: {e}")))?;
+    // The HRP is the only thing separating one chain's segwit addresses from
+    // another's -- the witness program carries no chain identity. Without this
+    // check a `bc1q...` recipient pasted on Navio (or an `nv1q...` on Bitcoin)
+    // encodes a perfectly valid scriptPubKey and the send goes through on the
+    // wrong chain. The legacy base58 path has always checked its version byte
+    // for exactly this reason.
+    if !hrp.as_str().eq_ignore_ascii_case(expected_hrp) {
+        return Err(Error::Codec(format!(
+            "address HRP '{}' does not match this chain (expected '{expected_hrp}')",
+            hrp.as_str()
+        )));
+    }
     if witness_ver != bech32::segwit::VERSION_0 || prog.len() != 20 {
         return Err(Error::Codec(
             "address is not a P2WPKH bech32 (witness v0, 20-byte program)".into(),
@@ -873,13 +885,13 @@ mod tests {
     fn decode_p2wpkh_mainnet() {
         // BIP-84 test vector address
         let addr = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
-        let hash = decode_p2wpkh_address(addr).unwrap();
+        let hash = decode_p2wpkh_address(addr, "bc").unwrap();
         assert_eq!(hash.len(), 20);
     }
 
     #[test]
     fn decode_p2wpkh_rejects_non_segwit() {
-        let err = decode_p2wpkh_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7Divf Xx").unwrap_err();
+        let err = decode_p2wpkh_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7Divf Xx", "bc").unwrap_err();
         assert!(err.to_string().contains("bech32"));
     }
 

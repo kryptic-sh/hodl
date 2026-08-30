@@ -397,6 +397,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bls12_381"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7bc6d6292be3a19e6379786dac800f551e5865a5bb51ebbe3064ab80433f403"
+dependencies = [
+ "ff",
+ "group",
+ "rand_core",
+ "subtle",
+]
+
+[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -655,9 +667,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -1517,6 +1529,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hodl-chain-navio"
+version = "0.7.1"
+dependencies = [
+ "bls12_381",
+ "hex",
+ "hmac",
+ "sha2",
+ "zeroize",
+]
+
+[[package]]
 name = "hodl-config"
 version = "0.7.1"
 dependencies = [
@@ -1526,6 +1549,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "toml",
+ "tracing",
 ]
 
 [[package]]
@@ -1553,6 +1577,7 @@ dependencies = [
  "hodl-chain-bitcoin",
  "hodl-chain-ethereum",
  "hodl-chain-monero",
+ "hodl-chain-navio",
  "hodl-config",
  "hodl-core",
  "hodl-wallet",

@@ -461,9 +461,25 @@ impl App {
                         Some(AccountAction::OpenAddressBook) => {
                             let book_path = AddressBook::default_path()
                                 .unwrap_or_else(|_| self.data_root.join("address_book.toml"));
-                            let book = AddressBook::load(&book_path).unwrap_or_default();
-                            let ab_state = AddressBookState::new(book, book_path);
-                            self.screen = Screen::AddressBook(Box::new(ab_state));
+                            // A book that failed to parse must not be opened
+                            // as an empty one: the screen saves the whole
+                            // struct back, so the first edit would overwrite
+                            // every contact still in the file.
+                            match AddressBook::load(&book_path) {
+                                Ok(book) => {
+                                    let ab_state = AddressBookState::new(book, book_path);
+                                    self.screen = Screen::AddressBook(Box::new(ab_state));
+                                }
+                                Err(e) => {
+                                    tracing::warn!("address book: {e}");
+                                    if let Screen::Accounts(s) = &mut self.screen {
+                                        s.flash = Some(format!(
+                                            "address book could not be read ({e}) — not opening it \
+                                             so the file is left intact"
+                                        ));
+                                    }
+                                }
+                            }
                         }
                         Some(AccountAction::OpenReceive) => {
                             // Resolve the best receive address from the scan

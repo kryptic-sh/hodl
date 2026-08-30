@@ -19,9 +19,13 @@ use crate::psbt::{
 
 /// Decode a recipient address string to a scriptPubKey for the given purpose.
 ///
-/// - Bip84 / Bip86: bech32 P2WPKH.
+/// The recipient's script type is independent of the wallet's own purpose --
+/// a segwit wallet pays a legacy address perfectly well -- so the segwit
+/// arms accept a base58 recipient too.
+///
+/// - Bip84 / Bip86: bech32 P2WPKH, or legacy base58 P2PKH / P2SH.
 /// - Bip44: base58check P2PKH or CashAddr P2PKH for BCH.
-/// - Bip49: returns an error (not yet implemented).
+/// - Bip49: base58check P2SH.
 fn decode_address_to_script(
     addr: &str,
     purpose: Purpose,
@@ -29,11 +33,15 @@ fn decode_address_to_script(
 ) -> Result<Vec<u8>> {
     match purpose {
         Purpose::Bip84 | Purpose::Bip86 => {
-            // Bech32 HRP must match the chain — bech32 decode does this implicitly
-            // since the HRP is part of the encoding, but we double-check the prog
-            // length for P2WPKH.
-            let hash = decode_p2wpkh_address(addr)?;
-            Ok(p2wpkh_script(&hash))
+            // Decide by shape, not by trying each codec in turn: falling
+            // through to base58 would answer a wrong-chain bech32 address
+            // with a confusing base58 parse error.
+            if bech32::segwit::decode(addr).is_ok() {
+                let hash = decode_p2wpkh_address(addr, params.bech32_hrp)?;
+                return Ok(p2wpkh_script(&hash));
+            }
+            // Not bech32: a legacy recipient.
+            base58_recipient_script(addr, params)
         }
         Purpose::Bip44 => {
             // CashAddr (BCH): contains a colon and uses the chain's HRP.
@@ -73,27 +81,39 @@ fn decode_address_to_script(
             h160.copy_from_slice(&decoded[1..]);
             Ok(p2pkh_script(&h160))
         }
-        Purpose::Bip49 => {
-            // P2SH-P2WPKH recipient address: base58check with p2sh_prefix.
-            let decoded = bs58::decode(addr)
-                .with_check(None)
-                .into_vec()
-                .map_err(|e| Error::Codec(format!("base58 decode: {e}")))?;
-            if decoded.len() != 21 {
-                return Err(Error::Codec("P2SH address must decode to 21 bytes".into()));
-            }
-            if decoded[0] != params.p2sh_prefix {
-                return Err(Error::Codec(format!(
-                    "address version byte 0x{:02x} does not match {} P2SH (expected 0x{:02x})",
-                    decoded[0],
-                    params.chain_id.display_name(),
-                    params.p2sh_prefix
-                )));
-            }
-            let mut script_hash = [0u8; 20];
-            script_hash.copy_from_slice(&decoded[1..]);
-            Ok(p2sh_script(&script_hash))
-        }
+        Purpose::Bip49 => base58_recipient_script(addr, params),
+    }
+}
+
+/// Decode a base58check recipient into its scriptPubKey.
+///
+/// The version byte selects P2PKH or P2SH and is checked against this chain's
+/// prefixes: sending DOGE to a BTC address (or NAV to a DOGE one) would
+/// otherwise silently encode the wrong scriptPubKey and lose the funds.
+fn base58_recipient_script(addr: &str, params: &NetworkParams) -> Result<Vec<u8>> {
+    let decoded = bs58::decode(addr)
+        .with_check(None)
+        .into_vec()
+        .map_err(|e| Error::Codec(format!("base58 decode: {e}")))?;
+    if decoded.len() != 21 {
+        return Err(Error::Codec(
+            "base58 address must decode to 21 bytes".into(),
+        ));
+    }
+    let mut hash = [0u8; 20];
+    hash.copy_from_slice(&decoded[1..]);
+    if decoded[0] == params.p2pkh_prefix {
+        Ok(p2pkh_script(&hash))
+    } else if decoded[0] == params.p2sh_prefix {
+        Ok(p2sh_script(&hash))
+    } else {
+        Err(Error::Codec(format!(
+            "address version byte 0x{:02x} does not match {} (expected 0x{:02x} P2PKH or 0x{:02x} P2SH)",
+            decoded[0],
+            params.chain_id.display_name(),
+            params.p2pkh_prefix,
+            params.p2sh_prefix
+        )))
     }
 }
 
@@ -216,12 +236,13 @@ impl BitcoinChain {
 
     /// Returns the default derivation purpose for this chain's send path.
     ///
-    /// - Bip44 (legacy P2PKH) for DOGE, BCH, NAV — bech32/segwit not
-    ///   deployed in upstream node software.
-    /// - Bip84 (native segwit P2WPKH) for everything else in the BTC family.
+    /// - Bip44 (legacy P2PKH) for DOGE and BCH — bech32/segwit not deployed
+    ///   in upstream node software.
+    /// - Bip84 (native segwit P2WPKH) for everything else in the BTC family,
+    ///   Navio included: segwit is active from height 0 there.
     pub fn default_send_purpose(chain_id: ChainId) -> Purpose {
         match chain_id {
-            ChainId::Dogecoin | ChainId::BitcoinCash | ChainId::NavCoin => Purpose::Bip44,
+            ChainId::Dogecoin | ChainId::BitcoinCash => Purpose::Bip44,
             _ => Purpose::Bip84,
         }
     }
@@ -229,6 +250,11 @@ impl BitcoinChain {
     /// Compute the Electrum scripthash for an address string.
     ///
     /// Supports bech32 P2WPKH, legacy P2PKH (base58check), and CashAddr P2PKH.
+    ///
+    /// Unlike `decode_address_to_script` this does not check the HRP or
+    /// version byte against the chain: every caller passes an address this
+    /// wallet derived itself, and a scripthash query leaks nothing and moves
+    /// no funds. Do not reuse it for user-supplied addresses.
     fn scripthash_for(&self, addr: &Address) -> Result<String> {
         let s = addr.as_str();
 
@@ -341,7 +367,7 @@ impl BitcoinChain {
         let pubkey_hash = hash160(&pubkey);
 
         // Recipient script.
-        let recipient_hash = decode_p2wpkh_address(params.to.as_str())?;
+        let recipient_hash = decode_p2wpkh_address(params.to.as_str(), self.params.bech32_hrp)?;
         let recipient_script = p2wpkh_script(&recipient_hash);
 
         // Build inputs.
@@ -610,7 +636,7 @@ impl BitcoinChain {
         let pubkey: [u8; 33] = xprv.public_key().to_bytes();
         let pubkey_hash = hash160(&pubkey);
 
-        let recipient_hash = decode_p2wpkh_address(params.to.as_str())?;
+        let recipient_hash = decode_p2wpkh_address(params.to.as_str(), self.params.bech32_hrp)?;
         let recipient_script = p2wpkh_script(&recipient_hash);
 
         let mut tx_inputs = Vec::with_capacity(selected_utxos.len());
@@ -863,8 +889,11 @@ impl Chain for BitcoinChain {
 /// satoshis/vByte, applying a per-chain defensive fallback when the server
 /// returns ≤ 0 (bug, no data, or undefined behaviour).
 ///
-/// - **NavCoin**: falls back to 100 sat/vByte (navcoin-js hardcoded default of
-///   100,000 sat/kB).
+/// - **Navio**: falls back to its minimum relay fee, 1 sat/vByte
+///   (`DEFAULT_MIN_RELAY_TX_FEE = 1000` sat/kB in navio-core's `policy.h`).
+///   Navio's mainnet launched in 2026 and its mempool is thin enough that
+///   `estimatefee` can come back with no data; a zero-fee transaction would
+///   not relay, so fall back to the relay floor rather than fail the send.
 /// - **All other chains**: returns `Err` rather than silently broadcasting a
 ///   zero-fee transaction.
 fn apply_fee_fallback(btc_per_kb: f64, chain: ChainId) -> Result<u64> {
@@ -875,14 +904,14 @@ fn apply_fee_fallback(btc_per_kb: f64, chain: ChainId) -> Result<u64> {
         // Server returned ≤ 0 (bug, no data, or rejected). Per-chain
         // defensive fallback or hard error.
         match chain {
-            ChainId::NavCoin => {
-                // navcoin-js convention: 100_000 sat/kB = 100 sat/vByte.
+            ChainId::Navio => {
+                // navio-core policy.h: 1000 sat/kB = 1 sat/vByte.
                 tracing::warn!(
-                    "{}: estimatefee returned {} (≤ 0); falling back to 100 sat/vByte (navcoin-js default)",
+                    "{}: estimatefee returned {} (<= 0); falling back to 1 sat/vByte (navio-core min relay fee)",
                     chain.display_name(),
                     btc_per_kb,
                 );
-                Ok(100)
+                Ok(1)
             }
             other => Err(Error::Chain(format!(
                 "{}: estimatefee returned {} — no canonical fallback for this chain; refusing zero-fee broadcast",
@@ -1040,7 +1069,7 @@ mod chain_tests {
         ];
 
         let recipient_hash =
-            decode_p2wpkh_address("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu").unwrap();
+            decode_p2wpkh_address("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", "bc").unwrap();
         let outputs = vec![TxOutput {
             script_pubkey: p2wpkh_script(&recipient_hash),
             value_sats: 59_000,
@@ -1078,8 +1107,8 @@ mod chain_tests {
             Purpose::Bip84
         );
         assert_eq!(
-            BitcoinChain::default_send_purpose(ChainId::NavCoin),
-            Purpose::Bip44
+            BitcoinChain::default_send_purpose(ChainId::Navio),
+            Purpose::Bip84
         );
         assert_eq!(
             BitcoinChain::default_send_purpose(ChainId::Dogecoin),
@@ -1108,6 +1137,117 @@ mod chain_tests {
         assert!(
             msg.contains("version byte") || msg.contains("does not match"),
             "error must mention prefix mismatch; got: {msg}"
+        );
+    }
+
+    /// A Bitcoin bech32 recipient must not encode a spendable script on
+    /// Navio. Both chains use segwit v0 P2WPKH, so the HRP is the only thing
+    /// telling them apart -- without that check the send would go through and
+    /// the NAV would be gone.
+    #[test]
+    fn segwit_recipient_rejects_wrong_chain_hrp() {
+        let btc_addr = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
+        let result =
+            decode_address_to_script(btc_addr, Purpose::Bip84, &NetworkParams::NAVIO_MAINNET);
+        let err = result.expect_err("a bc1 address must not be spendable on Navio");
+        assert!(
+            err.to_string().contains("HRP"),
+            "error should name the HRP mismatch; got: {err}"
+        );
+    }
+
+    /// And the reverse: a Navio address must not be spendable on Bitcoin.
+    #[test]
+    fn segwit_recipient_rejects_navio_address_on_bitcoin() {
+        let seed = [0x42u8; 64];
+        let nav_addr = crate::derive::derive_address(
+            &seed,
+            Purpose::Bip84,
+            &NetworkParams::NAVIO_MAINNET,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+        let err =
+            decode_address_to_script(&nav_addr, Purpose::Bip84, &NetworkParams::BITCOIN_MAINNET)
+                .expect_err("an nv1 address must not be spendable on Bitcoin");
+        assert!(
+            err.to_string().contains("HRP"),
+            "error should name the HRP mismatch; got: {err}"
+        );
+    }
+
+    /// A legacy recipient must be payable from a segwit wallet: the
+    /// recipient's script type has nothing to do with the sender's keys.
+    /// Navio defaults to BIP-84, so without this an `N…` address pasted from
+    /// a NavCoin-era address book would validate in the send form and then
+    /// die with a bech32 parse error after the user entered an amount.
+    #[test]
+    fn segwit_wallet_pays_a_legacy_recipient() {
+        let seed = [0x42u8; 64];
+        let nav_legacy = crate::derive::derive_address(
+            &seed,
+            Purpose::Bip44,
+            &NetworkParams::NAVIO_MAINNET,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+        assert!(nav_legacy.starts_with('N'));
+        let script =
+            decode_address_to_script(&nav_legacy, Purpose::Bip84, &NetworkParams::NAVIO_MAINNET)
+                .expect("a legacy NAV recipient must be payable from a BIP-84 wallet");
+        // P2PKH: OP_DUP OP_HASH160 <20> … OP_EQUALVERIFY OP_CHECKSIG
+        assert_eq!(script.len(), 25);
+        assert_eq!(&script[..3], &[0x76, 0xa9, 0x14]);
+    }
+
+    /// The same, for the BIP-49 "b…" P2SH form.
+    #[test]
+    fn segwit_wallet_pays_a_p2sh_recipient() {
+        let seed = [0x42u8; 64];
+        let nav_p2sh = crate::derive::derive_address(
+            &seed,
+            Purpose::Bip49,
+            &NetworkParams::NAVIO_MAINNET,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+        let script =
+            decode_address_to_script(&nav_p2sh, Purpose::Bip84, &NetworkParams::NAVIO_MAINNET)
+                .expect("a P2SH NAV recipient must be payable");
+        // P2SH: OP_HASH160 <20> … OP_EQUAL
+        assert_eq!(script.len(), 23);
+        assert_eq!(&script[..2], &[0xa9, 0x14]);
+        assert_eq!(script[22], 0x87);
+    }
+
+    /// A base58 address for another chain is still refused on the segwit
+    /// path, by its version byte.
+    #[test]
+    fn segwit_wallet_rejects_a_foreign_legacy_recipient() {
+        let btc_legacy = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
+        let err =
+            decode_address_to_script(btc_legacy, Purpose::Bip84, &NetworkParams::NAVIO_MAINNET)
+                .expect_err("a BTC legacy address must not be payable on Navio");
+        assert!(
+            err.to_string().contains("version byte"),
+            "error should name the version byte; got: {err}"
+        );
+    }
+
+    /// The matching chain still works, so the guard is not simply rejecting
+    /// everything.
+    #[test]
+    fn segwit_recipient_accepts_matching_hrp() {
+        let btc_addr = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
+        assert!(
+            decode_address_to_script(btc_addr, Purpose::Bip84, &NetworkParams::BITCOIN_MAINNET)
+                .is_ok()
         );
     }
 
@@ -1248,26 +1388,21 @@ mod chain_tests {
 
     // ── apply_fee_fallback unit tests ────────────────────────────────────────
 
-    /// NavCoin: server returns 0.0 → defensive fallback of 100 sat/vByte.
+    /// Navio: server returns 0.0 → defensive fallback of 1 sat/vByte.
     #[test]
     fn nav_fee_fallback_on_zero() {
-        let result = apply_fee_fallback(0.0, ChainId::NavCoin).unwrap();
-        assert_eq!(
-            result, 100,
-            "NavCoin zero-fee fallback should be 100 sat/vByte"
-        );
+        let result = apply_fee_fallback(0.0, ChainId::Navio).unwrap();
+        assert_eq!(result, 1, "Navio zero-fee fallback should be 1 sat/vByte");
     }
 
-    /// NavCoin: normal path (0.00001 BTC/kB = 1000 sat/kB = 1 sat/vByte → ceil = 1).
-    /// Use a value that gives 10 sat/vByte: 0.0001 BTC/kB = 10,000 sat/kB = 10 sat/vByte.
+    /// Navio: normal path. 0.0001 BTC/kB = 10,000 sat/kB = 10 sat/vByte.
     #[test]
     fn nav_fee_normal_path() {
-        // 0.0001 BTC/kB × 1e8 / 1000 = 10,000 sat/kB / 1000 = 10 sat/vByte
-        let result = apply_fee_fallback(0.0001, ChainId::NavCoin).unwrap();
+        let result = apply_fee_fallback(0.0001, ChainId::Navio).unwrap();
         assert_eq!(result, 10, "0.0001 BTC/kB should yield 10 sat/vByte");
     }
 
-    /// Non-NavCoin chains: server returns ≤ 0 → hard error, no zero-fee broadcast.
+    /// Non-Navio chains: server returns <= 0 → hard error, no zero-fee broadcast.
     #[test]
     fn non_nav_zero_returns_error() {
         let err = apply_fee_fallback(0.0, ChainId::Bitcoin).unwrap_err();

@@ -1,7 +1,7 @@
 //! Per-wallet, encrypted on-disk cache of scan results.
 //!
-//! Layout: `<data_root>/cache/<wallet_name>/<ticker>.cache`. One file per
-//! `ChainId` (named after `ChainId::ticker()` lowercased). Each file is an
+//! Layout: `<data_root>/cache/<wallet_name>/<slug>.cache`. One file per
+//! `ChainId` (see `cache_slug`; normally the lowercased ticker). Each file is an
 //! encrypted blob (see `hodl_wallet::cache`) wrapping a TOML-serialised
 //! `WalletScan`.
 //!
@@ -108,10 +108,10 @@ impl ScanCache {
                 Some(s) => s,
                 None => continue,
             };
-            let chain = match chain_from_ticker(stem) {
+            let chain = match chain_from_slug(stem) {
                 Some(c) => c,
                 None => {
-                    debug!("scan cache: skipping unknown ticker {stem:?}");
+                    debug!("scan cache: skipping unrecognised cache file {stem:?}");
                     continue;
                 }
             };
@@ -132,8 +132,7 @@ impl ScanCache {
     }
 
     fn path_for(&self, chain: ChainId) -> PathBuf {
-        self.dir
-            .join(format!("{}.cache", chain.ticker().to_ascii_lowercase()))
+        self.dir.join(format!("{}.cache", cache_slug(chain)))
     }
 
     fn load_from_disk(&self, chain: ChainId) -> Result<WalletScan, CacheError> {
@@ -186,16 +185,40 @@ impl Drop for ScanCache {
     }
 }
 
-/// Reverse of `ChainId::ticker().to_ascii_lowercase()`. Keep in sync with
-/// `ChainId` — adding a new variant requires adding an arm here too.
-fn chain_from_ticker(s: &str) -> Option<ChainId> {
+/// Filename stem for a chain's cache file.
+///
+/// Normally the lowercased ticker. Navio is the exception: it shares NAV with
+/// NavCoin, the chain hodl used to support, but it is a different blockchain
+/// with different derivation paths and address encodings. A `nav.cache` left
+/// behind by an older install holds NavCoin addresses and NavCoin balances, so
+/// giving Navio its own stem leaves that file unread — `hydrate_from_disk`
+/// skips an unrecognised stem, so Navio starts from a clean scan. The stale
+/// file is not deleted; it is encrypted and inert, and removing a user's data
+/// is not this function's call.
+fn cache_slug(chain: ChainId) -> &'static str {
+    match chain {
+        ChainId::Bitcoin => "btc",
+        ChainId::BitcoinTestnet => "tbtc",
+        ChainId::Litecoin => "ltc",
+        ChainId::Dogecoin => "doge",
+        ChainId::BitcoinCash => "bch",
+        ChainId::Navio => "navio",
+        ChainId::Ethereum => "eth",
+        ChainId::BscMainnet => "bnb",
+        ChainId::Monero => "xmr",
+    }
+}
+
+/// Reverse of [`cache_slug`]. Keep in sync with `ChainId` — adding a new
+/// variant requires adding an arm here too.
+fn chain_from_slug(s: &str) -> Option<ChainId> {
     match s {
         "btc" => Some(ChainId::Bitcoin),
         "tbtc" => Some(ChainId::BitcoinTestnet),
         "ltc" => Some(ChainId::Litecoin),
         "doge" => Some(ChainId::Dogecoin),
         "bch" => Some(ChainId::BitcoinCash),
-        "nav" => Some(ChainId::NavCoin),
+        "navio" => Some(ChainId::Navio),
         "eth" => Some(ChainId::Ethereum),
         "bnb" => Some(ChainId::BscMainnet),
         "xmr" => Some(ChainId::Monero),
@@ -249,24 +272,46 @@ mod tests {
         assert_eq!(got.used.len(), 1);
     }
 
+    /// A `nav.cache` left by an older NavCoin install must not hydrate as
+    /// Navio: it holds a different chain's addresses and balances.
     #[test]
-    fn ticker_roundtrip_covers_all_chains() {
+    fn legacy_navcoin_cache_is_not_hydrated_as_navio() {
+        let tmp = TempDir::new().unwrap();
+        let key = [9u8; 32];
+
+        // Write a cache file under Navio's *ticker*, the name NavCoin used.
+        {
+            let mut c = ScanCache::open(tmp.path(), "default", key);
+            c.put(ChainId::Navio, sample_scan());
+        }
+        let dir = tmp.path().join("cache").join("default");
+        std::fs::rename(dir.join("navio.cache"), dir.join("nav.cache")).unwrap();
+
+        let c2 = ScanCache::open(tmp.path(), "default", key);
+        assert!(
+            c2.get(ChainId::Navio).is_none(),
+            "a legacy nav.cache must be ignored, not read as Navio"
+        );
+    }
+
+    #[test]
+    fn slug_roundtrip_covers_all_chains() {
         for chain in [
             ChainId::Bitcoin,
             ChainId::BitcoinTestnet,
             ChainId::Litecoin,
             ChainId::Dogecoin,
             ChainId::BitcoinCash,
-            ChainId::NavCoin,
+            ChainId::Navio,
             ChainId::Ethereum,
             ChainId::BscMainnet,
             ChainId::Monero,
         ] {
-            let s = chain.ticker().to_ascii_lowercase();
+            let s = cache_slug(chain);
             assert_eq!(
-                chain_from_ticker(&s),
+                chain_from_slug(s),
                 Some(chain),
-                "ticker {s} did not round-trip"
+                "slug {s} did not round-trip"
             );
         }
     }

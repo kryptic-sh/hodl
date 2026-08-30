@@ -77,27 +77,38 @@ impl NetworkParams {
         default_electrum_tls_port: 50002,
     };
 
-    /// NavCoin (NAV) mainnet. Bitcoin-derivative chain — legacy P2PKH + P2SH
-    /// only.
+    /// Navio (NAV) mainnet — the chain that succeeded NavCoin.
     ///
-    /// Bech32/segwit is **NOT deployed** in navcoin-core (verified against
-    /// 7.0.3 and master 2026-05-04: `CChainParams` has no `Bech32HRP()` and
-    /// no `bech32_hrp` field; the WitnessV0KeyHash encoder in `key_io.cpp`
-    /// references `m_params.Bech32HRP()` but the method has no
-    /// implementation in upstream chainparams.h). Only Bip44 (legacy P2PKH
-    /// with prefix 0x35 → "N…" addresses) is supported. NavCoin's blsCT-
-    /// based xNAV shielded spends are explicitly post-v1.
+    /// Navio is a fresh Bitcoin-derivative launched in 2026 (genesis
+    /// `0af3c23a…`, `kernel/chainparams.cpp`) with BIP-141/143/147 segwit
+    /// active from height 0 and taproot `ALWAYS_ACTIVE`, so unlike NavCoin the
+    /// whole BIP-44/49/84/86 range is valid on the transparent side.
     ///
-    /// Endpoints: Electrum-NavCoin servers (default ports 40001 / 40002 per
-    /// upstream electrumx-NAV; verify on first integration).
-    pub const NAVCOIN_MAINNET: Self = Self {
-        chain_id: ChainId::NavCoin,
-        // No bech32 in upstream — kept as empty for type compatibility, never
-        // produces a valid encoding because Bip84/86 are gated off in
-        // derive::validate_purpose.
-        bech32_hrp: "",
+    /// **Address encoding follows the light-wallet stack, not
+    /// `navio-core`'s `chainparams.cpp`.** Upstream's `CMainParams` still
+    /// carries Bitcoin's inherited values (`PUBKEY_ADDRESS = 0`,
+    /// `SCRIPT_ADDRESS = 5`, `bech32_hrp = "bc"`), which would make Navio
+    /// addresses indistinguishable from Bitcoin's. The servers and wallets
+    /// hodl actually talks to agree on a distinct set instead:
+    /// nav-io/electrumx's `Navio` coin class (`P2PKH_VERBYTE = 0x35`,
+    /// `P2SH_VERBYTES = 0x55`) and nav-io/navio-electrum's `BitcoinMainnet`
+    /// (the same two, plus `SEGWIT_HRP = "nv"`) — and navio-core's own
+    /// `delegation_tests.cpp` uses an `nv1…` placeholder. We follow those.
+    ///
+    /// Endpoints: Navio ElectrumX. The ports below are the documented
+    /// defaults (and navio-electrum's `DEFAULT_PORTS`), but the one public
+    /// mainnet server its `servers.json` lists answers on 50002 -- which is
+    /// what the curated config endpoint uses. These two fields have no
+    /// readers today; endpoints carry explicit ports.
+    ///
+    /// Note this covers Navio's *transparent* outputs only. Confidential
+    /// (BLSCT) addresses are a different encoding entirely and live in
+    /// `hodl-chain-navio`.
+    pub const NAVIO_MAINNET: Self = Self {
+        chain_id: ChainId::Navio,
+        bech32_hrp: "nv",
         p2pkh_prefix: 0x35, // "N" addresses
-        p2sh_prefix: 0x55,  // "X" addresses (matches navcoin-core SCRIPT_ADDRESS = 85)
+        p2sh_prefix: 0x55,  // "b" addresses
         default_electrum_port: 40001,
         default_electrum_tls_port: 40002,
     };

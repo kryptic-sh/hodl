@@ -828,7 +828,8 @@ fn single_address_scan(
 fn purpose_label(chain: ChainId) -> &'static str {
     match chain {
         ChainId::Bitcoin | ChainId::BitcoinTestnet | ChainId::Litecoin => "Bip84 P2WPKH",
-        ChainId::Dogecoin | ChainId::NavCoin => "Bip44 P2PKH",
+        ChainId::Dogecoin => "Bip44 P2PKH",
+        ChainId::Navio => "Bip84 P2WPKH",
         ChainId::BitcoinCash => "Bip44 CashAddr",
         ChainId::Ethereum => "Bip44 ERC-20",
         ChainId::BscMainnet => "Bip44 BEP-20",
