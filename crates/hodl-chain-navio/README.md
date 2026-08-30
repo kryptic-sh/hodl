@@ -49,11 +49,25 @@ whether the mnemonic carries a passphrase:
 | none       | the raw 32-byte BIP-39 entropy | [`BlsctKeys::from_bip39_entropy`] |
 | set        | the 64-byte BIP-39 seed        | [`BlsctKeys::from_bip39_seed`]    |
 
-hodl's vault stores only the stretched 64-byte seed, so the TUI uses
-`from_bip39_seed`. A navio-core or navio-electrum wallet restored from the
-same mnemonic **without** a passphrase derives from the entropy instead and
-will show a different address. `from_bip39_entropy` is exposed for callers
-that do hold the entropy.
+hodl's vault stores only the stretched 64-byte seed, so `from_bip39_entropy`
+is currently unreachable from the TUI. Since the empty-passphrase case is the
+default, a hodl-derived BLSCT address would not match what navio-core or
+navio-electrum show for the same mnemonic — and hodl cannot scan or spend
+BLSCT outputs itself. Funds sent to such an address would be recoverable by no
+shipping wallet, so **hodl does not surface a BLSCT receive address**. The
+derivation is implemented and verified so that it is ready when either the
+vault carries entropy or BLSCT scanning lands.
+
+## Derivation path divergence (transparent side)
+
+hodl derives Navio's transparent addresses at `m/84'/130'/0'` — 130 being
+SLIP-44's registered NAV coin type, the index navio-core's BLSCT tree branches
+at, and what NavCoin used in hodl before.
+
+`nav-io/navio-electrum` sets `BIP44_COIN_TYPE = 0` and ships only
+`m/44'|49'|84'/0'/0'`. Restoring a hodl mnemonic there shows an empty wallet
+until a custom `m/84'/130'/0'` derivation is added. This affects the
+transparent side only; BLSCT derivation is not BIP-32 and is unaffected.
 
 ## Not implemented
 

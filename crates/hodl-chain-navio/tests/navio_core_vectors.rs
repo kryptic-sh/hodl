@@ -8,7 +8,7 @@
 
 use hodl_chain_navio::keys::BlsctKeys;
 use hodl_chain_navio::scalar::scalar_from_be_bytes;
-use hodl_chain_navio::{MAINNET_HRP, decode_address, encode_address};
+use hodl_chain_navio::{MAINNET_HRP, REGTEST_HRP, TESTNET_HRP, decode_address, encode_address};
 
 /// Expected addresses for account 0, sub-address indices 0..10.
 const EXPECTED: [&str; 10] = [
@@ -57,7 +57,7 @@ fn addresses_round_trip_through_the_decoder() {
 
 #[test]
 fn decoder_rejects_the_wrong_network() {
-    assert!(decode_address("tnv", EXPECTED[0]).is_none());
+    assert!(decode_address(TESTNET_HRP, EXPECTED[0]).is_none());
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn decoder_rejects_identity_keys() {
     const NULL_SPEND_KEY: &str = "rnv1jlca8fe3jltegf54vwxyl2dvplpk3rz0ja6tjpdpfcar79cm43vxc40g8luh5xh0lva0qzkmytrthsqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqma0f57ul";
     for addr in [NULL_KEY, NULL_VIEW_KEY, NULL_SPEND_KEY] {
         assert!(
-            decode_address("rnv", addr).is_none(),
+            decode_address(REGTEST_HRP, addr).is_none(),
             "identity-keyed address accepted: {addr}"
         );
     }

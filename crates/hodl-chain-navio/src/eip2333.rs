@@ -21,7 +21,12 @@ const OKM_LEN: usize = 48;
 fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; DIGEST_SIZE] {
     let mut mac = HmacSha256::new_from_slice(salt).expect("HMAC accepts any key length");
     mac.update(ikm);
-    mac.finalize().into_bytes().into()
+    // `into_bytes` hands back a GenericArray that would otherwise fall out of
+    // scope un-scrubbed, leaving a second copy of the PRK on the stack.
+    let mut tag = mac.finalize().into_bytes();
+    let prk: [u8; DIGEST_SIZE] = tag.into();
+    tag.zeroize();
+    prk
 }
 
 /// HKDF-Expand with an empty-or-short `info`, writing `out.len()` bytes.
@@ -36,7 +41,9 @@ fn hkdf_expand(prk: &[u8; DIGEST_SIZE], info: &[u8], out: &mut [u8]) {
         }
         mac.update(info);
         mac.update(&[i as u8]);
-        prev = mac.finalize().into_bytes().into();
+        let mut tag = mac.finalize().into_bytes();
+        prev = tag.into();
+        tag.zeroize();
 
         let start = (i - 1) * DIGEST_SIZE;
         let end = usize::min(start + DIGEST_SIZE, out.len());

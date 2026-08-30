@@ -109,9 +109,11 @@ pub fn validate_recipient(s: &str, chain: ChainId) -> std::result::Result<(), St
                         .into(),
                 );
             }
-            validate_segwit_v0_or_p2pkh(s)
+            validate_segwit_v0_or_p2pkh(s, "nv")
         }
-        Bitcoin | BitcoinTestnet | Litecoin => validate_segwit_v0_or_p2pkh(s),
+        Bitcoin => validate_segwit_v0_or_p2pkh(s, "bc"),
+        BitcoinTestnet => validate_segwit_v0_or_p2pkh(s, "tb"),
+        Litecoin => validate_segwit_v0_or_p2pkh(s, "ltc"),
         // Dogecoin: legacy P2PKH only — DOGE never deployed bech32.
         Dogecoin => validate_base58_p2pkh(s),
         BitcoinCash => {
@@ -131,14 +133,25 @@ pub fn validate_recipient(s: &str, chain: ChainId) -> std::result::Result<(), St
     }
 }
 
-/// Accept a bech32 segwit v0 (P2WPKH) address, falling back to legacy
-/// base58check P2PKH.
-fn validate_segwit_v0_or_p2pkh(s: &str) -> std::result::Result<(), String> {
-    if let Ok((_, ver, prog)) = bech32::segwit::decode(s)
-        && ver == bech32::segwit::VERSION_0
-        && prog.len() == 20
-    {
-        return Ok(());
+/// Accept a bech32 segwit v0 (P2WPKH) address whose HRP matches this chain,
+/// falling back to legacy base58check P2PKH.
+///
+/// The HRP check is what keeps a `bc1q…` out of the Navio send form (and an
+/// `nv1q…` out of Bitcoin's): the witness program alone carries no chain
+/// identity, so both would otherwise encode a valid script on the wrong chain.
+/// `decode_p2wpkh_address` enforces the same rule at signing time; this is the
+/// front door, so the user is told before they fill in an amount.
+fn validate_segwit_v0_or_p2pkh(s: &str, hrp: &str) -> std::result::Result<(), String> {
+    if let Ok((got_hrp, ver, prog)) = bech32::segwit::decode(s) {
+        if !got_hrp.as_str().eq_ignore_ascii_case(hrp) {
+            return Err(format!(
+                "address is for another chain (prefix '{}', expected '{hrp}')",
+                got_hrp.as_str()
+            ));
+        }
+        if ver == bech32::segwit::VERSION_0 && prog.len() == 20 {
+            return Ok(());
+        }
     }
     validate_base58_p2pkh(s)
 }
@@ -1517,6 +1530,34 @@ mod tests {
             err.contains("BLSCT"),
             "error should explain the BLSCT limitation; got: {err}"
         );
+    }
+
+    /// A Bitcoin address must not pass the Navio send form: both chains use
+    /// segwit v0 P2WPKH, so only the HRP distinguishes them.
+    #[test]
+    fn validate_recipient_rejects_btc_address_on_navio() {
+        let btc = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
+        let err = validate_recipient(btc, ChainId::Navio).unwrap_err();
+        assert!(
+            err.contains("another chain"),
+            "error should say it's the wrong chain; got: {err}"
+        );
+    }
+
+    /// And the reverse.
+    #[test]
+    fn validate_recipient_rejects_navio_address_on_btc() {
+        let seed = [0x42u8; 64];
+        let nav = hodl_chain_bitcoin::derive::derive_address(
+            &seed,
+            hodl_chain_bitcoin::derive::Purpose::Bip84,
+            &hodl_chain_bitcoin::NetworkParams::NAVIO_MAINNET,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+        assert!(validate_recipient(&nav, ChainId::Bitcoin).is_err());
     }
 
     #[test]

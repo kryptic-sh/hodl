@@ -189,9 +189,15 @@ impl BlsctKeys {
 }
 
 /// SHA-256d, Bitcoin Core's `HashWriter::GetHash`.
+///
+/// The intermediate digest is scrubbed: for the sub-address preimage this
+/// hash chain runs over the view key, so both rounds hold secret-derived
+/// material.
 fn sha256d(data: &[u8]) -> [u8; 32] {
-    let first = Sha256::digest(data);
-    Sha256::digest(first).into()
+    let mut first = Sha256::digest(data);
+    let out = Sha256::digest(first).into();
+    first.zeroize();
+    out
 }
 
 /// Derive a stealth sub-address from the view key and spend public key.
@@ -221,7 +227,11 @@ pub fn sub_address(
     preimage.extend_from_slice(&account.to_le_bytes());
     preimage.extend_from_slice(&index.to_le_bytes());
 
-    let m = scalar_from_be_bytes(&sha256d(&preimage));
+    // `digest` is the sub-address scalar in byte form -- wipe it once it has
+    // been reduced into the field.
+    let mut digest = sha256d(&preimage);
+    let m = scalar_from_be_bytes(&digest);
+    digest.zeroize();
     preimage.zeroize();
     view_be.zeroize();
 

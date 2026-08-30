@@ -26,5 +26,7 @@ pub mod eip2333;
 pub mod keys;
 pub mod scalar;
 
-pub use address::{MAINNET_HRP, TESTNET_HRP, decode_address, encode_address, looks_like_address};
+pub use address::{
+    MAINNET_HRP, REGTEST_HRP, TESTNET_HRP, decode_address, encode_address, looks_like_address,
+};
 pub use keys::{BlsctKeys, DoublePublicKey};

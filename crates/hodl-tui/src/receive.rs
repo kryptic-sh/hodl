@@ -6,12 +6,6 @@
 //!
 //! `y` yanks the address to the system clipboard via
 //! [`crate::clipboard::ClipboardHandle`] (OSC 52 fallback works over SSH).
-//!
-//! Navio has two receiving identities — a transparent script address and a
-//! BLSCT confidential sub-address — so the screen carries an optional second
-//! pane, toggled with `c`. Both QR codes are rendered up front: the BLSCT
-//! address is 166 characters and encoding it is not free, and doing it lazily
-//! would stall the toggle.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hodl_core::Address;
@@ -35,77 +29,32 @@ pub enum ReceiveAction {
     ShowHelp,
 }
 
-/// One displayable receiving identity: the address, its provenance label, and
-/// its pre-rendered QR.
-struct Pane {
-    address: String,
-    label: String,
-    qr_lines: Vec<String>,
-}
-
-impl Pane {
-    fn new(address: String, label: String) -> Self {
-        let qr_lines = render_qr(&address);
-        Self {
-            address,
-            label,
-            qr_lines,
-        }
-    }
-}
-
 pub struct ReceiveState {
     pub address: Address,
     pub deriv_path: String,
-    transparent: Pane,
-    /// Present only for chains with a second address type (Navio's BLSCT
-    /// confidential sub-address).
-    confidential: Option<Pane>,
-    showing_confidential: bool,
+    qr_lines: Vec<String>,
     yank_flash: Option<String>,
 }
 
 impl ReceiveState {
     pub fn new(address: Address, deriv_path: String) -> Self {
-        let transparent = Pane::new(address.as_str().to_string(), deriv_path.clone());
+        let qr_lines = render_qr(address.as_str());
         Self {
             address,
             deriv_path,
-            transparent,
-            confidential: None,
-            showing_confidential: false,
+            qr_lines,
             yank_flash: None,
-        }
-    }
-
-    /// Attach a confidential (BLSCT) address, reachable with `c`.
-    pub fn with_confidential(mut self, address: String, label: String) -> Self {
-        self.confidential = Some(Pane::new(address, label));
-        self
-    }
-
-    fn pane(&self) -> &Pane {
-        match (&self.confidential, self.showing_confidential) {
-            (Some(c), true) => c,
-            _ => &self.transparent,
         }
     }
 
     /// Keybind reference for the contextual help overlay.
     pub fn help_lines(&self) -> Vec<(String, String)> {
-        let mut lines = vec![("y".into(), "Copy address to clipboard".into())];
-        if self.confidential.is_some() {
-            lines.push((
-                "c".into(),
-                "Toggle transparent / confidential address".into(),
-            ));
-        }
-        lines.extend([
+        vec![
+            ("y".into(), "Copy address to clipboard".into()),
             ("q / Esc".into(), "Back to accounts".into()),
             ("Ctrl+C / Ctrl+D".into(), "Quit".into()),
             ("?".into(), "Show this help".into()),
-        ]);
-        lines
+        ]
     }
 
     pub fn handle_key(
@@ -121,12 +70,8 @@ impl ReceiveState {
 
         match key.code {
             KeyCode::Char('y') => {
-                clipboard.yank(&self.pane().address);
+                clipboard.yank(self.address.as_str());
                 self.yank_flash = Some("address copied to clipboard".into());
-            }
-            KeyCode::Char('c') if self.confidential.is_some() => {
-                self.showing_confidential = !self.showing_confidential;
-                self.yank_flash = None;
             }
             KeyCode::Char('q') | KeyCode::Esc => return Some(ReceiveAction::Back),
             KeyCode::Char('?') => return Some(ReceiveAction::ShowHelp),
@@ -224,10 +169,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut ReceiveState) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let has_confidential = state.confidential.is_some();
-    let pane = state.pane();
-
-    let qr_height = pane.qr_lines.len() as u16;
+    let qr_height = state.qr_lines.len() as u16;
     let info_height = 4u16; // address + path + flash + hint
 
     let chunks = Layout::default()
@@ -240,7 +182,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut ReceiveState) {
         .split(inner);
 
     // QR block.
-    let qr_lines: Vec<Line> = pane
+    let qr_lines: Vec<Line> = state
         .qr_lines
         .iter()
         .map(|l| Line::from(l.as_str()))
@@ -256,19 +198,14 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut ReceiveState) {
     let flash_style = Style::default().fg(Color::Green);
     let hint_style = Style::default().fg(Color::DarkGray);
 
-    let hint = if has_confidential {
-        "y copy • c toggle transparent/confidential • q / Esc back"
-    } else {
-        "y copy • q / Esc back"
-    };
     let info_lines = vec![
-        Line::from(Span::styled(pane.address.clone(), addr_style)),
-        Line::from(Span::styled(pane.label.clone(), path_style)),
+        Line::from(Span::styled(state.address.as_str().to_string(), addr_style)),
+        Line::from(Span::styled(state.deriv_path.clone(), path_style)),
         Line::from(Span::styled(
             state.yank_flash.as_deref().unwrap_or("").to_string(),
             flash_style,
         )),
-        Line::from(Span::styled(hint, hint_style)),
+        Line::from(Span::styled("y copy • q / Esc back", hint_style)),
     ];
 
     let info_para = Paragraph::new(info_lines).alignment(Alignment::Center);

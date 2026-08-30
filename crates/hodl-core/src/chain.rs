@@ -24,8 +24,19 @@ impl ChainId {
             ChainId::Litecoin => 2,
             ChainId::Dogecoin => 3,
             ChainId::BitcoinCash => 145,
-            // Navio: SLIP-44 130 (NAV), inherited from NavCoin. Navio's own
-            // BLSCT key tree uses 130 as its EIP-2333 branch index too.
+            // Navio: SLIP-44 130 (NAV), inherited from NavCoin, and the
+            // index navio-core's own BLSCT key tree branches at
+            // (`FromSeedToChildKey` -> `derive_child_SK(seed, 130)`).
+            //
+            // nav-io/navio-electrum instead sets `BIP44_COIN_TYPE = 0` and
+            // only offers m/44'|49'|84'/0'/0' -- Bitcoin's coin type, left
+            // over from the Electrum fork it is built on. A mnemonic used in
+            // both wallets therefore lands on different transparent
+            // addresses, and recovering hodl-derived NAV in navio-electrum
+            // means adding a custom m/84'/130'/0' derivation there. We keep
+            // 130: it is what SLIP-44 registers for NAV, what navio-core's
+            // BLSCT tree uses, and what NavCoin used here before, so existing
+            // hodl users' paths do not move.
             ChainId::Navio => 130,
             ChainId::Ethereum => 60,
             // BSC reuses ETH derivation; coin_type 60 per BEP-44 convention

@@ -13,6 +13,8 @@ use crate::keys::{DOUBLE_PUBKEY_SIZE, DoublePublicKey};
 pub const MAINNET_HRP: &str = "nav";
 /// Testnet BLSCT address prefix.
 pub const TESTNET_HRP: &str = "tnv";
+/// Regtest BLSCT address prefix.
+pub const REGTEST_HRP: &str = "rnv";
 
 /// Encode a BLSCT destination as an address string.
 pub fn encode_address(hrp: &str, dpk: &DoublePublicKey) -> Option<String> {

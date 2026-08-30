@@ -29,10 +29,10 @@ fn decode_address_to_script(
 ) -> Result<Vec<u8>> {
     match purpose {
         Purpose::Bip84 | Purpose::Bip86 => {
-            // Bech32 HRP must match the chain — bech32 decode does this implicitly
-            // since the HRP is part of the encoding, but we double-check the prog
-            // length for P2WPKH.
-            let hash = decode_p2wpkh_address(addr)?;
+            // Both the HRP and the witness-program shape are checked inside
+            // `decode_p2wpkh_address`; the HRP is what pins the address to
+            // this chain.
+            let hash = decode_p2wpkh_address(addr, params.bech32_hrp)?;
             Ok(p2wpkh_script(&hash))
         }
         Purpose::Bip44 => {
@@ -342,7 +342,7 @@ impl BitcoinChain {
         let pubkey_hash = hash160(&pubkey);
 
         // Recipient script.
-        let recipient_hash = decode_p2wpkh_address(params.to.as_str())?;
+        let recipient_hash = decode_p2wpkh_address(params.to.as_str(), self.params.bech32_hrp)?;
         let recipient_script = p2wpkh_script(&recipient_hash);
 
         // Build inputs.
@@ -611,7 +611,7 @@ impl BitcoinChain {
         let pubkey: [u8; 33] = xprv.public_key().to_bytes();
         let pubkey_hash = hash160(&pubkey);
 
-        let recipient_hash = decode_p2wpkh_address(params.to.as_str())?;
+        let recipient_hash = decode_p2wpkh_address(params.to.as_str(), self.params.bech32_hrp)?;
         let recipient_script = p2wpkh_script(&recipient_hash);
 
         let mut tx_inputs = Vec::with_capacity(selected_utxos.len());
@@ -1044,7 +1044,7 @@ mod chain_tests {
         ];
 
         let recipient_hash =
-            decode_p2wpkh_address("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu").unwrap();
+            decode_p2wpkh_address("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", "bc").unwrap();
         let outputs = vec![TxOutput {
             script_pubkey: p2wpkh_script(&recipient_hash),
             value_sats: 59_000,
@@ -1112,6 +1112,54 @@ mod chain_tests {
         assert!(
             msg.contains("version byte") || msg.contains("does not match"),
             "error must mention prefix mismatch; got: {msg}"
+        );
+    }
+
+    /// A Bitcoin bech32 recipient must not encode a spendable script on
+    /// Navio. Both chains use segwit v0 P2WPKH, so the HRP is the only thing
+    /// telling them apart -- without that check the send would go through and
+    /// the NAV would be gone.
+    #[test]
+    fn segwit_recipient_rejects_wrong_chain_hrp() {
+        let btc_addr = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
+        let result =
+            decode_address_to_script(btc_addr, Purpose::Bip84, &NetworkParams::NAVIO_MAINNET);
+        let err = result.expect_err("a bc1 address must not be spendable on Navio");
+        assert!(
+            err.to_string().contains("HRP"),
+            "error should name the HRP mismatch; got: {err}"
+        );
+    }
+
+    /// And the reverse: a Navio address must not be spendable on Bitcoin.
+    #[test]
+    fn segwit_recipient_rejects_navio_address_on_bitcoin() {
+        let seed = [0x42u8; 64];
+        let nav_addr = crate::derive::derive_address(
+            &seed,
+            Purpose::Bip84,
+            &NetworkParams::NAVIO_MAINNET,
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+        let result =
+            decode_address_to_script(&nav_addr, Purpose::Bip84, &NetworkParams::BITCOIN_MAINNET);
+        assert!(
+            result.is_err(),
+            "an nv1 address must not be spendable on Bitcoin"
+        );
+    }
+
+    /// The matching chain still works, so the guard is not simply rejecting
+    /// everything.
+    #[test]
+    fn segwit_recipient_accepts_matching_hrp() {
+        let btc_addr = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
+        assert!(
+            decode_address_to_script(btc_addr, Purpose::Bip84, &NetworkParams::BITCOIN_MAINNET)
+                .is_ok()
         );
     }
 

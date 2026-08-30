@@ -18,8 +18,16 @@ and this project adheres to
   Pinned by navio-core's own golden vectors — the ten mainnet addresses in
   `blsct/wallet/keyman_tests.cpp` are reproduced byte for byte — plus the
   published EIP-2333 test vectors.
-- Receive screen shows Navio's confidential (BLSCT) address alongside the
-  transparent one; `c` toggles between them and `y` copies whichever is shown.
+
+### Fixed
+
+- Bech32 recipient addresses are now checked against the chain's HRP before a
+  script is built. `decode_p2wpkh_address` discarded the HRP, so a `bc1q…`
+  pasted into the Navio send form (or an `nv1q…` into Bitcoin's) encoded a
+  valid scriptPubKey and the send went out on the wrong chain. The legacy
+  base58 path had always checked its version byte for exactly this reason; the
+  segwit path now matches it, and the send screen rejects the mismatch up front.
+  This also closes the same hole between BTC and LTC.
 
 ### Changed
 
@@ -29,8 +37,7 @@ and this project adheres to
   failing to parse — which, since `hodl` loads its config with
   `unwrap_or_default()`, would have silently discarded every other setting in
   the file. Navio then picks up its curated default. A chain key that is
-  neither current nor a known legacy name is still a hard error. Cached scan
-  entries are keyed on the `nav` ticker and carry over unchanged.
+  neither current nor a known legacy name is still a hard error.
 - Navio transparent addresses use verbytes `0x35` / `0x55` and the `nv` segwit
   HRP, following nav-io/electrumx and nav-io/navio-electrum. navio-core's
   `chainparams.cpp` still carries Bitcoin's inherited `0` / `5` / `"bc"`, which
@@ -45,17 +52,29 @@ and this project adheres to
 - Pinned `mlugg/setup-zig` to zig 0.15.1 to skip `build.zig.zon` lookup and fix
   post-step CI noise.
 - Bumped `crossbeam-epoch` 0.9.18 → 0.9.20 for RUSTSEC-2026-0204.
+- Navio's scan cache moved to its own `navio.cache` filename. A `nav.cache`
+  written by an older NavCoin install holds a different chain's addresses and
+  balances, so it is now ignored rather than hydrated as Navio.
 
 ### Known limitations
 
-- Sending to a BLSCT (`nav1…`) recipient is rejected with an explanatory error:
-  building a confidential transaction needs Bulletproofs+ range proving,
-  set-membership proofs and BLS aggregate signing, none of which are
-  implemented. Balance and history cover Navio's transparent outputs only.
-- hodl's vault stores the stretched 64-byte BIP-39 seed, so BLSCT keys derive
-  from that (navio-core's mnemonic-with-passphrase path). A navio-core or
-  navio-electrum wallet restored from the same mnemonic with an _empty_
-  passphrase derives from the raw entropy and will show a different address.
+- Navio support covers the **transparent** side only: balance, history, receive
+  and send all operate on Navio's script outputs. Sending to a BLSCT (`nav1…`)
+  recipient is rejected with an explanatory error; building a confidential
+  transaction needs Bulletproofs+ range proving, set-membership proofs and BLS
+  aggregate signing, none of which are implemented.
+- **hodl does not yet display a BLSCT receive address.** The derivation is
+  implemented and verified, but hodl can neither scan nor spend BLSCT outputs,
+  and its vault stores only the stretched 64-byte BIP-39 seed — so it derives
+  via navio-core's mnemonic-_with_-passphrase path, while navio-core and
+  navio-electrum use the raw 32-byte entropy when the passphrase is empty (the
+  default). Funds sent to an address hodl derived that way would be recoverable
+  by no shipping wallet, so the address is not surfaced. Lighting it up needs
+  either the vault to carry BIP-39 entropy (`BlsctKeys::from_bip39_entropy` is
+  ready for it) or BLSCT scanning to land.
+- Navio's transparent addresses derive at `m/84'/130'/0'`. navio-electrum uses
+  coin type 0, so recovering hodl-derived NAV there needs a custom derivation
+  path added. See `crates/hodl-chain-navio/README.md`.
 
 ## [0.7.1] - 2026-05-06
 

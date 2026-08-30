@@ -313,27 +313,54 @@ const LEGACY_CHAIN_KEYS: &[&str] = &[
     "nav-coin",
 ];
 
+/// A `[chains.*]` table key: either a live chain or a retired name.
+///
+/// Deserializing the key through this type — rather than collecting
+/// `HashMap<String, _>` and converting afterwards — is what keeps the error
+/// span pointing at the offending key. `toml` attributes a failure to the
+/// span it is deserializing at the time, so converting later reports whichever
+/// key happened to be visited first instead of the bad one.
+///
+/// `Legacy` carries the name so two retired keys cannot collide in the map.
+#[derive(PartialEq, Eq, Hash)]
+enum ChainKey {
+    Live(ChainId),
+    Legacy(String),
+}
+
+impl<'de> Deserialize<'de> for ChainKey {
+    fn deserialize<D>(de: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{Error as _, IntoDeserializer};
+
+        let name = String::deserialize(de)?;
+        let parsed: Result<ChainId, serde::de::value::Error> =
+            ChainId::deserialize(name.as_str().into_deserializer());
+        match parsed {
+            Ok(id) => Ok(ChainKey::Live(id)),
+            Err(_) if LEGACY_CHAIN_KEYS.contains(&name.as_str()) => Ok(ChainKey::Legacy(name)),
+            Err(e) => Err(D::Error::custom(e)),
+        }
+    }
+}
+
 /// Deserialize `[chains.*]`, dropping [`LEGACY_CHAIN_KEYS`].
 fn deserialize_chains<'de, D>(de: D) -> Result<HashMap<ChainId, ChainConfig>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    use serde::de::{Error as _, IntoDeserializer};
-
-    let raw: HashMap<String, ChainConfig> = HashMap::deserialize(de)?;
+    let raw: HashMap<ChainKey, ChainConfig> = HashMap::deserialize(de)?;
     let mut out = HashMap::with_capacity(raw.len());
     for (key, cc) in raw {
-        let parsed: Result<ChainId, serde::de::value::Error> =
-            ChainId::deserialize(key.as_str().into_deserializer());
-        match parsed {
-            Ok(id) => {
+        match key {
+            ChainKey::Live(id) => {
                 out.insert(id, cc);
             }
-            Err(_) if LEGACY_CHAIN_KEYS.contains(&key.as_str()) => tracing::warn!(
-                "config: [chains.{key}] names a chain hodl no longer supports; \
-                 ignoring it"
+            ChainKey::Legacy(name) => tracing::warn!(
+                "config: [chains.{name}] names a chain hodl no longer supports; ignoring it"
             ),
-            Err(e) => return Err(D::Error::custom(e)),
         }
     }
     Ok(out)
@@ -569,6 +596,31 @@ endpoints = []
         let path = tmp.path().join("config.toml");
         let cfg = Config::load(&path).expect("load");
         assert_eq!(cfg, Config::default());
+    }
+
+    /// The reported line must be the bad key's own, not some other stanza's.
+    ///
+    /// `Config::load` turns the serde span into `ConfigError::Parse { line,
+    /// col, snippet }`, so a lost span points the user at valid config and
+    /// shows them the wrong snippet. Collecting the table as
+    /// `HashMap<String, _>` and converting keys afterwards does exactly that,
+    /// which is why the key type carries its own `Deserialize`.
+    #[test]
+    fn unknown_chain_key_error_points_at_the_bad_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        let src = "\n[tor]\nenabled = true\nsocks5 = \"socks5://127.0.0.1:9050\"\n\n[chains.bitcoin]\ngap_limit = 3\n\n[chains.not-a-real-chain]\ngap_limit = 10\n";
+        std::fs::write(&path, src).unwrap();
+
+        match Config::load(&path).expect_err("unknown chain key must fail") {
+            ConfigError::Parse { line, snippet, .. } => {
+                assert_eq!(
+                    snippet, "[chains.not-a-real-chain]",
+                    "snippet must show the offending key, got {snippet:?} at line {line}"
+                );
+            }
+            other => panic!("expected a Parse error, got {other:?}"),
+        }
     }
 
     /// A key that is neither current nor a known legacy name is still an
