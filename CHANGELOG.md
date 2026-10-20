@@ -49,6 +49,12 @@ and this project adheres to
 
 ### Changed
 
+- Bumped `rustls` 0.23.40 → 0.23.46 (with `rustls-webpki` 0.103.15) for
+  RUSTSEC-2026-0285, RUSTSEC-2026-0346, RUSTSEC-2026-0348 and RUSTSEC-2026-0349:
+  TLS 1.3 handshake messages accepted across encryption levels, `Debug` output
+  exposing TLS secrets, 1 GiB Brotli certificate decompression before
+  authentication, and a ServerHello downgrade to classical key exchange. It
+  carries the Bitcoin Electrum connection and the Ethereum and Monero RPC calls.
 - **Breaking:** `ChainId::NavCoin` is now `ChainId::Navio`. The config key
   changes from `[chains.nav-coin]` to `[chains.navio]`. A config carrying the
   old key now loads with that one block dropped and a warning, instead of
