@@ -21,6 +21,11 @@ and this project adheres to
 
 ### Fixed
 
+- **The Homebrew formula loads on Homebrew 7.** Homebrew now loads every formula
+  in a tap for each OS and architecture when it taps it, and this one only had
+  its URLs under `on_macos`, so `brew tap kryptic-sh/tap` failed with "invalid
+  syntax in tap" and no kryptic-sh tool could be installed. The URLs moved out
+  of `on_macos` and `depends_on :macos` keeps the formula macOS-only.
 - Recipient addresses are now checked for chain identity on every path.
   `decode_p2wpkh_address` discarded the bech32 HRP, so a `bc1q…` pasted into
   the Navio send form (or an `nv1q…` into Bitcoin's) encoded a valid
