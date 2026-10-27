@@ -31,12 +31,13 @@ use std::thread::JoinHandle;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use hjkl_editor_tui::form::{FormPalette, draw_form};
+use hjkl_engine_tui::crossterm_to_input;
 use hjkl_form::{
-    CheckboxField, Field, FieldMeta, Form, FormMode, Input, SelectField, SubmitField,
-    TextFieldEditor, Validator,
+    CheckboxField, Field, FieldMeta, Form, FormMode, SelectField, SubmitField, TextFieldEditor,
+    Validator,
 };
 use hjkl_picker::{PickerAction, PickerEvent, PickerLogic};
-use hjkl_ratatui::form::{FormPalette, draw_form};
 use hodl_chain_bitcoin::NetworkParams as BtcNetworkParams;
 use hodl_config::{AddressBook, Config, Contact, KnownHosts};
 use hodl_core::{Address, Amount, ChainId, FeeRate};
@@ -386,12 +387,12 @@ impl SendState {
         let Some(picker) = &mut self.book_picker else {
             return false;
         };
-        match picker.handle_key(key) {
+        match hjkl_picker_tui::handle_key(picker, key) {
             PickerEvent::Cancel => {
                 self.book_picker = None;
             }
-            PickerEvent::Select(PickerAction::OpenPath(addr_path)) => {
-                let addr = addr_path.to_string_lossy().into_owned();
+            PickerEvent::Select(PickerAction::Custom(payload)) => {
+                let addr = payload.downcast::<String>().map(|a| *a).unwrap_or_default();
                 if let Some(Field::SingleLineText(f)) = self.form.fields.get_mut(FIELD_RECIPIENT) {
                     f.set_text(&addr);
                 }
@@ -1097,7 +1098,7 @@ where
                 if state.is_busy() {
                     // Only allow Esc to return to Normal mode (cosmetic).
                     if k.code == KeyCode::Esc {
-                        state.form.handle_input(Input::from(k));
+                        state.form.handle_input(crossterm_to_input(k));
                     }
                     continue;
                 }
@@ -1134,7 +1135,7 @@ where
                     continue;
                 }
 
-                state.form.handle_input(Input::from(k));
+                state.form.handle_input(crossterm_to_input(k));
             }
             Event::Resize(_, _) => continue,
             _ => continue,
@@ -1297,7 +1298,7 @@ fn draw_busy(f: &mut ratatui::Frame, area: Rect, state: &mut SendState) {
     // what they submitted.
     draw_form(f, chunks[0], &mut state.form, &FormPalette::dark());
 
-    let spinner_text = format!("{label}  {}", hjkl_ratatui::spinner::frame());
+    let spinner_text = format!("{label}  {}", hjkl_editor_tui::spinner::frame());
     let spinner_line = Line::from(Span::styled(spinner_text, Style::default().fg(Color::Cyan)));
     let p = Paragraph::new(spinner_line).alignment(Alignment::Center);
     f.render_widget(p, chunks[1]);
@@ -1428,7 +1429,7 @@ impl PickerLogic for ContactPickerSource {
             .get(idx)
             .map(|c| c.address.clone())
             .unwrap_or_default();
-        PickerAction::OpenPath(PathBuf::from(addr))
+        PickerAction::Custom(Box::new(addr))
     }
 
     fn enumerate(
@@ -1687,6 +1688,19 @@ mod tests {
         );
         let flash = state.flash.as_ref().unwrap();
         assert!(flash.contains("Litecoin"), "flash names the chain");
+    }
+
+    #[test]
+    fn book_picker_enter_writes_the_picked_address_to_recipient() {
+        let book = make_book();
+        let mut state = SendState::new_with_book(ChainId::Bitcoin, 1_000_000, book);
+        state.open_book_picker();
+        assert!(state.handle_book_picker_key(crossterm::event::KeyEvent::from(KeyCode::Enter)));
+        assert!(state.book_picker.is_none(), "selecting closes the picker");
+        assert_eq!(
+            state.field_text(FIELD_RECIPIENT),
+            "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu"
+        );
     }
 
     #[test]

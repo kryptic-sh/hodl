@@ -209,7 +209,7 @@ pub fn draw(
         // account index is always 0 for Bitcoin-family; InFlight rows don't
         // have it, but derive_address uses the same account=0 convention.
         let account_idx: u32 = 0;
-        let spinner = hjkl_ratatui::spinner::frame();
+        let spinner = hjkl_editor_tui::spinner::frame();
         let rows: Vec<Row> = rows_data
             .iter()
             .map(|row| match row {

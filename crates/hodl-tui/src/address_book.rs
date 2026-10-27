@@ -10,7 +10,8 @@ use std::sync::atomic::AtomicBool;
 use std::thread::JoinHandle;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use hjkl_form::{Field, FieldMeta, Form, FormMode, Input, TextFieldEditor};
+use hjkl_engine_tui::crossterm_to_input;
+use hjkl_form::{Field, FieldMeta, Form, FormMode, TextFieldEditor};
 use hjkl_picker::{PickerAction, PickerEvent, PickerLogic};
 use hodl_config::{AddressBook, Contact};
 use hodl_core::ChainId;
@@ -281,7 +282,7 @@ impl AddressBookState {
             self.try_save_contact();
             return None;
         }
-        self.add_form.handle_input(Input::from(key));
+        self.add_form.handle_input(crossterm_to_input(key));
         None
     }
 
@@ -303,7 +304,7 @@ impl AddressBookState {
 
     fn handle_chain_picker_key(&mut self, key: KeyEvent) -> Option<AddressBookAction> {
         if let Some(picker) = &mut self.chain_picker {
-            match picker.handle_key(key) {
+            match hjkl_picker_tui::handle_key(picker, key) {
                 PickerEvent::Cancel => {
                     self.chain_picker = None;
                     self.mode = Mode::Add;

@@ -49,6 +49,14 @@ and this project adheres to
 
 ### Changed
 
+- Updated the `hjkl-*` crates to 0.43.4 together (`hjkl-config` and
+  `hjkl-splash` from 0.27, `hjkl-form` and `hjkl-picker` from 0.3,
+  `hjkl-clipboard` from 0.4), which brings hjkl's vim-compatibility fixes to
+  every form field. `hjkl-ratatui` is replaced by `hjkl-editor-tui`, its
+  successor; picker keys now go through `hjkl-picker-tui` and form keys through
+  `hjkl-engine-tui`'s `crossterm_to_input`, which is where hjkl moved them.
+  `hjkl-engine` 0.43 now pulls in `hjkl-bonsai` and tree-sitter (through
+  `hjkl-lang`).
 - Bumped `k256` 0.13 → 0.14 and `bip32` 0.5 → 0.6 (with `sha2` 0.11, `ripemd`
   0.2 and `hmac` 0.13), which moves `crypto-bigint` 0.5.5 → 0.7.10 for
   RUSTSEC-2026-0387: subtraction, division and Montgomery multiplication meant

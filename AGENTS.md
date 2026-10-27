@@ -68,7 +68,7 @@ process.
 
 - Off-thread the work (`std::thread::spawn` + `mpsc::channel`) so the event loop
   keeps redrawing.
-- Use `hjkl_ratatui::spinner::frame()` — wall-clock derived, caller-cadence-
+- Use `hjkl_editor_tui::spinner::frame()` — wall-clock derived, caller-cadence-
   independent. No local frame counters, no manual tick-on-empty.
 - `pending_*: Option<Receiver<…>>` on the screen state; drop the event-poll
   timeout to ~80ms while pending so redraws keep up with the spinner.

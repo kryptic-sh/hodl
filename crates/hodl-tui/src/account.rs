@@ -13,7 +13,7 @@
 //! - `ScanEvent::Used(used)` → append to `partial_scan`; redraw immediately.
 //! - `ScanEvent::Done(scan)` → swap `partial_scan` into `scan`; clear pending.
 //! - `ScanEvent::Error(msg)` → set scan_error; clear pending.
-//! - `TryRecvError::Empty`   → no state change; wall-clock spinner via `hjkl_ratatui::spinner::frame()` on next draw.
+//! - `TryRecvError::Empty`   → no state change; wall-clock spinner via `hjkl_editor_tui::spinner::frame()` on next draw.
 //! - `TryRecvError::Disconnected` → set scan_error to "scan thread panicked".
 //!
 //! Navigation keys are responsive even while a scan is in flight:
@@ -194,7 +194,7 @@ pub struct AccountState {
     /// Chain picker overlay. `None` when closed.
     picker: Option<hjkl_picker::Picker>,
     /// Ordered chain list parallel to the open picker; used to resolve
-    /// `PickerAction::SwitchSlot(idx)` back to a `ChainId`.
+    /// the picker's `PickerAction::Custom(idx)` back to a `ChainId`.
     picker_chains: Vec<ChainId>,
     /// Flash message shown in the status/hint bar. Settable by the App layer
     /// (e.g. after a TOFU StayPinned action).
@@ -514,22 +514,23 @@ impl AccountState {
 
         // Picker overlay absorbs keys when open.
         if let Some(picker) = &mut self.picker {
-            match picker.handle_key(key) {
+            match hjkl_picker_tui::handle_key(picker, key) {
                 PickerEvent::Cancel => {
                     self.picker = None;
                 }
                 PickerEvent::Select(PickerAction::None) | PickerEvent::None => {
                     picker.refresh();
                 }
-                PickerEvent::Select(PickerAction::SwitchSlot(idx)) => {
+                PickerEvent::Select(PickerAction::Custom(payload)) => {
                     self.picker = None;
-                    if let Some(&chain) = self.picker_chains.get(idx) {
+                    if let Some(&chain) = payload
+                        .downcast::<usize>()
+                        .ok()
+                        .and_then(|idx| self.picker_chains.get(*idx))
+                    {
                         self.current_chain = chain;
                         return Some(AccountAction::ChainSwitched);
                     }
-                }
-                PickerEvent::Select(_) => {
-                    self.picker = None;
                 }
             }
             return None;
@@ -916,7 +917,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
         // Spinner suffix only while a scan is in flight.
         let suffix: Span = if state.is_scanning() {
             Span::styled(
-                format!("  {}", hjkl_ratatui::spinner::frame()),
+                format!("  {}", hjkl_editor_tui::spinner::frame()),
                 Style::default().fg(Color::Cyan),
             )
         } else {
@@ -993,7 +994,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut AccountState) {
 
     // Status line.
     let (status_text, status_color) = if state.is_scanning() {
-        let frame = hjkl_ratatui::spinner::frame();
+        let frame = hjkl_editor_tui::spinner::frame();
         let attempt_suffix = if state.scan_attempt > 1 {
             format!(" (attempt {}/{MAX_SCAN_ATTEMPTS})", state.scan_attempt)
         } else {
@@ -1134,7 +1135,7 @@ impl PickerLogic for ChainPickerSource {
     }
 
     fn select(&self, idx: usize) -> PickerAction {
-        PickerAction::SwitchSlot(idx)
+        PickerAction::Custom(Box::new(idx))
     }
 
     fn enumerate(
@@ -1162,6 +1163,23 @@ mod tests {
             Config::default(),
             Arc::new(Mutex::new(KnownHosts::default())),
         )
+    }
+
+    #[test]
+    fn chain_picker_enter_switches_to_the_picked_chain() {
+        let mut state = make_state();
+        state.config.chains = [ChainId::Ethereum, ChainId::Litecoin]
+            .into_iter()
+            .map(|c| (c, Default::default()))
+            .collect();
+        state.current_chain = ChainId::Bitcoin;
+        state.open_picker();
+        // Sorted by name: Ethereum, then Litecoin.
+        assert!(state.handle_key(KeyEvent::from(KeyCode::Down)).is_none());
+        let action = state.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(action, Some(AccountAction::ChainSwitched)));
+        assert_eq!(state.current_chain, ChainId::Litecoin);
+        assert!(state.picker.is_none(), "selecting closes the picker");
     }
 
     #[test]

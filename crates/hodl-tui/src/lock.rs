@@ -17,13 +17,13 @@
 //! `std::sync::mpsc::channel` carries the result back. While a decrypt attempt
 //! is in flight, `pending_unlock` holds the `Receiver` end. The event loop
 //! polls it each tick with `try_recv` and renders an animated spinner (wall-clock
-//! frame via `hjkl_ratatui::spinner::frame()`) so the user knows the app is working.
+//! frame via `hjkl_editor_tui::spinner::frame()`) so the user knows the app is working.
 //!
 //! Key presses are ignored while `pending_unlock` is `Some` — argon2id is
 //! uninterruptible, so cancellation is not meaningful; ignoring keys prevents
 //! queueing a second submit attempt on top of the in-flight one.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver};
@@ -32,7 +32,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use hjkl_form::{Field, FieldMeta, Form, FormMode, Input, TextFieldEditor};
+use hjkl_engine_tui::crossterm_to_input;
+use hjkl_form::{Field, FieldMeta, Form, FormMode, TextFieldEditor};
 use hjkl_picker::{PickerAction, PickerEvent, PickerLogic};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -354,25 +355,17 @@ fn handle_key(
 
     // Wallet switcher picker absorbs keys when open.
     if let Some(picker) = &mut state.picker {
-        match picker.handle_key(k) {
+        match hjkl_picker_tui::handle_key(picker, k) {
             PickerEvent::Cancel => {
                 state.picker = None;
             }
             PickerEvent::Select(PickerAction::None) | PickerEvent::None => {
                 picker.refresh();
             }
-            PickerEvent::Select(PickerAction::OpenPath(p)) => {
+            PickerEvent::Select(PickerAction::Custom(payload)) => {
                 state.picker = None;
-                // The path carries the wallet name as a plain component.
-                let name = p
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_default()
-                    .to_string();
+                let name = payload.downcast::<String>().map(|n| *n).unwrap_or_default();
                 return Some(Outcome::SwitchWallet(name));
-            }
-            PickerEvent::Select(_) => {
-                state.picker = None;
             }
         }
         return None;
@@ -422,7 +415,7 @@ fn handle_key(
         }
     }
 
-    state.form.handle_input(Input::from(k));
+    state.form.handle_input(crossterm_to_input(k));
     None
 }
 
@@ -460,9 +453,8 @@ impl PickerLogic for WalletPickerSource {
     }
 
     fn select(&self, idx: usize) -> PickerAction {
-        // Encode the wallet name as an `OpenPath` so we can retrieve it.
         let name = self.names.get(idx).cloned().unwrap_or_default();
-        PickerAction::OpenPath(PathBuf::from(name))
+        PickerAction::Custom(Box::new(name))
     }
 
     fn enumerate(
@@ -524,7 +516,7 @@ fn draw_locked(f: &mut ratatui::Frame, area: Rect, state: &mut LockState) {
 
     // Show spinner while decrypting, otherwise show any status message.
     if state.pending_unlock.is_some() {
-        let text = format!("decrypting…  {}", hjkl_ratatui::spinner::frame());
+        let text = format!("decrypting…  {}", hjkl_editor_tui::spinner::frame());
         let line = Line::from(Span::styled(text, Style::default().fg(Color::Cyan)));
         let p = Paragraph::new(line).alignment(Alignment::Center);
         f.render_widget(p, chunks[2]);
@@ -630,7 +622,7 @@ fn draw_wallet_picker_overlay(f: &mut ratatui::Frame, area: Rect, state: &mut Lo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hjkl_form::Key;
+    use hjkl_form::{Input, Key};
     use hodl_wallet::{Wallet, vault::KdfParams};
     use tempfile::TempDir;
 
@@ -666,6 +658,23 @@ mod tests {
             state.form.handle_input(ki(c));
         }
         state.form.handle_input(special(Key::Esc));
+    }
+
+    #[test]
+    fn wallet_picker_enter_switches_to_the_picked_wallet() {
+        let dir = TempDir::new().unwrap();
+        let wallet = test_wallet(&dir);
+        let mut state = LockState::new();
+        let key = |c| crossterm::event::KeyEvent::from(c);
+
+        assert!(handle_key(&mut state, &wallet, key(KeyCode::Char('w')), dir.path()).is_none());
+        assert!(state.picker.is_some(), "`w` opens the wallet picker");
+        let outcome = handle_key(&mut state, &wallet, key(KeyCode::Enter), dir.path());
+        assert!(
+            matches!(&outcome, Some(Outcome::SwitchWallet(name)) if name == "test"),
+            "Enter switches to the picked wallet"
+        );
+        assert!(state.picker.is_none(), "selecting closes the picker");
     }
 
     #[test]

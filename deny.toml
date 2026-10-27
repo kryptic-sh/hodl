@@ -48,6 +48,10 @@ allow-wildcard-paths = true
 #   0.12 uses hmac 0.12. argon2, chacha20poly1305, curve25519-dalek, rand and
 #   bls12_381 0.9 (ff and group 0.14) have releases on the new generation;
 #   docs/backlog.md tracks moving them.
+# - hashbrown 0.16: ratatui-core (0.1.2, its latest) requires it, while
+#   indexmap is on 0.17.
+# - miniz_oxide 0.8: flate2 1.1.9 under ureq 2, beside hjkl-clipboard's 0.9.
+#   flate2 1.1.10 moves to 0.9 but also switches its backend to zlib-rs.
 skip = [
     { crate = "thiserror@1" },
     { crate = "thiserror-impl@1" },
@@ -61,6 +65,8 @@ skip = [
     { crate = "hmac@0.12" },
     { crate = "rand_core@0.6" },
     { crate = "sha2@0.10" },
+    { crate = "hashbrown@0.16" },
+    { crate = "miniz_oxide@0.8" },
 ]
 
 [sources]

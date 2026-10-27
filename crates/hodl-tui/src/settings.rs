@@ -8,11 +8,11 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use hjkl_editor_tui::form::{FormPalette, draw_form};
+use hjkl_engine_tui::crossterm_to_input;
 use hjkl_form::{
-    CheckboxField, Field, FieldMeta, Form, FormMode, Input, SelectField, SubmitField,
-    TextFieldEditor,
+    CheckboxField, Field, FieldMeta, Form, FormMode, SelectField, SubmitField, TextFieldEditor,
 };
-use hjkl_ratatui::form::{FormPalette, draw_form};
 use hodl_config::{Config, KdfPreset, LockConfig, TorConfig};
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -222,7 +222,7 @@ where
                     return Ok(SettingsAction::Back);
                 }
 
-                state.form.handle_input(Input::from(k));
+                state.form.handle_input(crossterm_to_input(k));
             }
             Event::Resize(_, _) => continue,
             _ => continue,
