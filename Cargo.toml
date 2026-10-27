@@ -49,10 +49,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Light-wallet crypto primitives. Pulled in at workspace level so all
 # crates agree on a single version of the secp256k1 / hashing stack.
 secp256k1 = { version = "0.29", features = ["rand", "global-context"] }
-sha2 = "0.10"
-ripemd = "0.1"
+sha2 = "0.11"
+ripemd = "0.2"
 bip39 = { version = "2", features = ["crate_rand"] }
-bip32 = "0.5"
+bip32 = { version = "0.6", features = ["alloc"] }
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
 rand = "0.8"
@@ -62,11 +62,11 @@ tempfile = "3"
 bech32 = "0.11"
 bs58 = { version = "0.5", features = ["check"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-k256 = { version = "0.13", features = ["arithmetic", "ecdsa"] }
+k256 = { version = "0.14", features = ["arithmetic", "ecdsa"] }
 tiny-keccak = { version = "2", features = ["keccak"] }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
 bls12_381 = { version = "0.8", default-features = false, features = ["groups", "alloc"] }
-hmac = "0.12"
+hmac = "0.13"
 base58-monero = "2"
 
 hodl-core = { path = "crates/hodl-core", version = "0.7" }

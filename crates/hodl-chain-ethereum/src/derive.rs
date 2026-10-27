@@ -24,11 +24,11 @@ pub fn derive_secret_key(seed: &[u8; 64], account: u32, index: u32) -> Result<[u
 /// Secret key → k256 public key → uncompressed 64-byte X||Y → keccak256 → last 20 bytes.
 pub fn derive_address(seed: &[u8; 64], account: u32, index: u32) -> Result<String> {
     let secret_bytes = derive_secret_key(seed, account, index)?;
-    let signing_key = k256::ecdsa::SigningKey::from_bytes(secret_bytes.as_ref().into())
+    let signing_key = k256::ecdsa::SigningKey::from_bytes((&secret_bytes).into())
         .map_err(|e| Error::Chain(format!("invalid secret key: {e}")))?;
     let verifying_key = signing_key.verifying_key();
     // Uncompressed point: 0x04 || X || Y (65 bytes). Drop the 0x04 prefix.
-    let point = verifying_key.to_encoded_point(false);
+    let point = verifying_key.to_sec1_point(false);
     let uncompressed = point.as_bytes();
     debug_assert_eq!(uncompressed.len(), 65, "uncompressed pubkey is 65 bytes");
     let xy: &[u8; 64] = uncompressed[1..].try_into().expect("65 - 1 = 64");

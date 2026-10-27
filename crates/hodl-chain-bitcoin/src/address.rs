@@ -103,7 +103,7 @@ fn tagged_hash(tag: &[u8], msg: &[u8]) -> [u8; 32] {
 /// We use k256 which is already in the dependency tree via bip32.
 fn tap_tweak_key_path(x_only: &[u8]) -> Result<[u8; 32]> {
     use k256::elliptic_curve::PrimeField;
-    use k256::elliptic_curve::sec1::ToEncodedPoint;
+    use k256::elliptic_curve::sec1::ToSec1Point;
 
     // Reconstruct the full compressed point from x-only (assume even Y, parity 0x02).
     let mut compressed = [0u8; 33];
@@ -126,7 +126,7 @@ fn tap_tweak_key_path(x_only: &[u8]) -> Result<[u8; 32]> {
         .map_err(|_| Error::Codec("taproot output key is identity".into()))?;
 
     // x-only: strip the parity byte.
-    let encoded = output_key.to_encoded_point(true);
+    let encoded = output_key.to_sec1_point(true);
     let bytes = encoded.as_bytes();
     let mut out = [0u8; 32];
     out.copy_from_slice(&bytes[1..33]);

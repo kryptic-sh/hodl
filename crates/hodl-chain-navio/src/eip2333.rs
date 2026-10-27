@@ -5,7 +5,7 @@
 //! with SHA-256 on every round, including the first.
 
 use bls12_381::Scalar;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
@@ -21,7 +21,7 @@ const OKM_LEN: usize = 48;
 fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; DIGEST_SIZE] {
     let mut mac = HmacSha256::new_from_slice(salt).expect("HMAC accepts any key length");
     mac.update(ikm);
-    // `into_bytes` hands back a GenericArray that would otherwise fall out of
+    // `into_bytes` hands back an `Array` that would otherwise fall out of
     // scope un-scrubbed, leaving a second copy of the PRK on the stack.
     let mut tag = mac.finalize().into_bytes();
     let prk: [u8; DIGEST_SIZE] = tag.into();

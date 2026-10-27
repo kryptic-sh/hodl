@@ -49,6 +49,12 @@ and this project adheres to
 
 ### Changed
 
+- Bumped `k256` 0.13 → 0.14 and `bip32` 0.5 → 0.6 (with `sha2` 0.11, `ripemd`
+  0.2 and `hmac` 0.13), which moves `crypto-bigint` 0.5.5 → 0.7.10 for
+  RUSTSEC-2026-0387: subtraction, division and Montgomery multiplication meant
+  to be constant-time could branch on secret values. `crypto-bigint` sits under
+  `k256` (through `elliptic-curve`), which derives the BIP-32 keys and signs
+  Bitcoin-family and Ethereum transactions.
 - Bumped `rustls-webpki` 0.103.15 → 0.103.16 for RUSTSEC-2026-0382 and
   `webpki-roots` 1.0.7 → 1.0.11 for RUSTSEC-2026-0381, which stop trusting
   certificate paths through distrusted emSign intermediates and drop the emSign

@@ -538,7 +538,7 @@ pub fn sign_inputs_legacy_p2pkh(
             .map_err(|e| Error::Chain(format!("ecdsa sign: {e}")))?;
 
         let der = sig.to_der().to_bytes().to_vec();
-        let pubkey = signing_key.verifying_key().to_encoded_point(true);
+        let pubkey = signing_key.verifying_key().to_sec1_point(true);
         let pubkey_bytes: [u8; 33] = pubkey.as_bytes().try_into().unwrap();
 
         script_sigs.push(p2pkh_script_sig(&der, sighash_byte, &pubkey_bytes));
@@ -599,7 +599,7 @@ pub fn sign_inputs_p2sh_p2wpkh(
         let mut der = sig.to_der().to_bytes().to_vec();
         der.push(0x01); // SIGHASH_ALL
 
-        let pubkey = signing_key.verifying_key().to_encoded_point(true);
+        let pubkey = signing_key.verifying_key().to_sec1_point(true);
         let pubkey_bytes: Vec<u8> = pubkey.as_bytes().to_vec();
 
         // redeemScript = OP_0 <20-byte pubkey-hash> (22 bytes).
@@ -782,7 +782,7 @@ pub fn sign_inputs(inputs: &[TxInput], outputs: &[TxOutput], keys: &[[u8; 32]]) 
         let mut der = sig.to_der().to_bytes().to_vec();
         der.push(0x01); // SIGHASH_ALL
 
-        let pubkey = signing_key.verifying_key().to_encoded_point(true);
+        let pubkey = signing_key.verifying_key().to_sec1_point(true);
         let pubkey_bytes = pubkey.as_bytes().to_vec();
 
         witnesses.push(vec![der, pubkey_bytes]);
@@ -900,7 +900,7 @@ mod tests {
         // Build a minimal transaction + sign it; verify the witness stack shape.
         let key_bytes = [1u8; 32];
         let signing_key = SigningKey::from_bytes((&key_bytes).into()).unwrap();
-        let pubkey = signing_key.verifying_key().to_encoded_point(true);
+        let pubkey = signing_key.verifying_key().to_sec1_point(true);
         let pubkey_bytes: [u8; 33] = pubkey.as_bytes().try_into().unwrap();
         let pubkey_hash = hash160(&pubkey_bytes);
 
@@ -926,7 +926,7 @@ mod tests {
     fn bip143_sighash_is_deterministic() {
         let key_bytes = [2u8; 32];
         let signing_key = SigningKey::from_bytes((&key_bytes).into()).unwrap();
-        let pubkey = signing_key.verifying_key().to_encoded_point(true);
+        let pubkey = signing_key.verifying_key().to_sec1_point(true);
         let pubkey_bytes: [u8; 33] = pubkey.as_bytes().try_into().unwrap();
         let pubkey_hash = hash160(&pubkey_bytes);
 
@@ -966,7 +966,7 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[seed_byte; 32].into()).unwrap();
         let pubkey_bytes: [u8; 33] = signing_key
             .verifying_key()
-            .to_encoded_point(true)
+            .to_sec1_point(true)
             .as_bytes()
             .try_into()
             .unwrap();
@@ -1083,7 +1083,7 @@ mod tests {
     fn psbt_build_has_magic() {
         let key_bytes = [3u8; 32];
         let signing_key = SigningKey::from_bytes((&key_bytes).into()).unwrap();
-        let pubkey = signing_key.verifying_key().to_encoded_point(true);
+        let pubkey = signing_key.verifying_key().to_sec1_point(true);
         let pubkey_bytes: [u8; 33] = pubkey.as_bytes().try_into().unwrap();
         let pubkey_hash = hash160(&pubkey_bytes);
 
@@ -1110,7 +1110,7 @@ mod tests {
         let signing_key = SigningKey::from_bytes((&key_bytes).into()).unwrap();
         let pubkey: [u8; 33] = signing_key
             .verifying_key()
-            .to_encoded_point(true)
+            .to_sec1_point(true)
             .as_bytes()
             .try_into()
             .unwrap();
@@ -1276,7 +1276,7 @@ mod tests {
         let signing_key = SigningKey::from_bytes((&key_bytes).into()).unwrap();
         let pubkey: [u8; 33] = signing_key
             .verifying_key()
-            .to_encoded_point(true)
+            .to_sec1_point(true)
             .as_bytes()
             .try_into()
             .unwrap();

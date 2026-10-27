@@ -141,11 +141,9 @@ pub fn sighash(tx: &Eip1559Tx) -> [u8; 32] {
 ///               value, data, access_list, y_parity, r, s])`.
 pub fn sign(tx: &Eip1559Tx, key: &[u8; 32]) -> Result<Vec<u8>> {
     let hash = sighash(tx);
-    let signing_key = SigningKey::from_bytes(key.as_ref().into())
+    let signing_key = SigningKey::from_bytes(key.into())
         .map_err(|e| Error::Chain(format!("invalid signing key: {e}")))?;
-    let (sig, recid): (Signature, RecoveryId) = signing_key
-        .sign_prehash_recoverable(&hash)
-        .map_err(|e| Error::Chain(format!("ecdsa sign: {e}")))?;
+    let (sig, recid): (Signature, RecoveryId) = signing_key.sign_prehash_recoverable(&hash);
 
     let r = sig.r().to_bytes();
     let s = sig.s().to_bytes();
@@ -216,9 +214,8 @@ mod tests {
 
         // Recover and verify the signature round-trips.
         let hash = sighash(&tx);
-        let signing_key = SigningKey::from_bytes(key.as_ref().into()).unwrap();
-        let (sig, _recid): (Signature, RecoveryId) =
-            signing_key.sign_prehash_recoverable(&hash).unwrap();
+        let signing_key = SigningKey::from_bytes((&key).into()).unwrap();
+        let (sig, _recid): (Signature, RecoveryId) = signing_key.sign_prehash_recoverable(&hash);
         let verifying_key = VerifyingKey::from(&signing_key);
         verifying_key.verify_prehash(&hash, &sig).unwrap();
     }
