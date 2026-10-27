@@ -27,28 +27,33 @@ and this project adheres to
   syntax in tap" and no kryptic-sh tool could be installed. The URLs moved out
   of `on_macos` and `depends_on :macos` keeps the formula macOS-only.
 - Recipient addresses are now checked for chain identity on every path.
-  `decode_p2wpkh_address` discarded the bech32 HRP, so a `bc1q…` pasted into
-  the Navio send form (or an `nv1q…` into Bitcoin's) encoded a valid
-  scriptPubKey and the send went out on the wrong chain. The send screen only
-  checked the base58 shape, never the version byte, so a `1…` or `D…` passed
-  there too. Both are now checked at the front door and again at signing time.
-  This also closes the same holes between BTC, LTC and DOGE.
+  `decode_p2wpkh_address` discarded the bech32 HRP, so a `bc1q…` pasted into the
+  Navio send form (or an `nv1q…` into Bitcoin's) encoded a valid scriptPubKey
+  and the send went out on the wrong chain. The send screen only checked the
+  base58 shape, never the version byte, so a `1…` or `D…` passed there too. Both
+  are now checked at the front door and again at signing time. This also closes
+  the same holes between BTC, LTC and DOGE.
 - A segwit wallet can pay a legacy recipient again. `decode_address_to_script`
   keyed the recipient's script type off the _wallet's_ purpose, so a BIP-84
   wallet — which is now Navio's default, and already was Bitcoin's and
-  Litecoin's — rejected every base58 address with a bech32 parse error after
-  the user had entered an amount, even though the send form accepted it. The
+  Litecoin's — rejected every base58 address with a bech32 parse error after the
+  user had entered an amount, even though the send form accepted it. The
   recipient's script type has nothing to do with the sender's keys.
 - An address book containing a contact on a retired chain no longer loads as
   empty. `AddressBook::load` is consumed with `unwrap_or_default()` and the
-  address-book screen writes the whole struct back, so one `chain =
-"nav-coin"` entry would have blanked the book on open and destroyed every
-  other contact on the next edit. The stale entry is dropped, the rest kept,
-  and a book that genuinely fails to parse no longer opens at all — it can't
-  be overwritten by an edit.
+  address-book screen writes the whole struct back, so one `chain = "nav-coin"`
+  entry would have blanked the book on open and destroyed every other contact on
+  the next edit. The stale entry is dropped, the rest kept, and a book that
+  genuinely fails to parse no longer opens at all — it can't be overwritten by
+  an edit.
 
 ### Changed
 
+- Bumped `rustls-webpki` 0.103.15 → 0.103.16 for RUSTSEC-2026-0382 and
+  `webpki-roots` 1.0.7 → 1.0.11 for RUSTSEC-2026-0381, which stop trusting
+  certificate paths through distrusted emSign intermediates and drop the emSign
+  ECC Root CA - G3. `webpki-roots` is the root store `ureq` uses for the
+  Ethereum and Monero RPC clients.
 - Bumped `rustls` 0.23.40 → 0.23.46 (with `rustls-webpki` 0.103.15) for
   RUSTSEC-2026-0285, RUSTSEC-2026-0346, RUSTSEC-2026-0348 and RUSTSEC-2026-0349:
   TLS 1.3 handshake messages accepted across encryption levels, `Debug` output
@@ -60,8 +65,8 @@ and this project adheres to
   old key now loads with that one block dropped and a warning, instead of
   failing to parse — which, since `hodl` loads its config with
   `unwrap_or_default()`, would have silently discarded every other setting in
-  the file. Navio then picks up its curated default. A chain key that is
-  neither current nor a known legacy name is still a hard error.
+  the file. Navio then picks up its curated default. A chain key that is neither
+  current nor a known legacy name is still a hard error.
 - Navio transparent addresses use verbytes `0x35` / `0x55` and the `nv` segwit
   HRP, following nav-io/electrumx and nav-io/navio-electrum. navio-core's
   `chainparams.cpp` still carries Bitcoin's inherited `0` / `5` / `"bc"`, which
