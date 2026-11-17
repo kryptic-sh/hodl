@@ -40,7 +40,8 @@ multiple-versions = "deny"
 wildcards = "deny"
 allow-wildcard-paths = true
 # Transitive duplicates we can't collapse without forking upstream:
-# - thiserror 1.x: pinned by base58-monero
+# - syn 2: most proc-macro crates are still on it, while thiserror 2.0.21
+#   moved to syn 3.
 # - the RustCrypto digest 0.10 / rand_core 0.6 generation, beside the
 #   digest 0.11 / rand_core 0.10 one that k256 0.14 and bip32 0.6 need: bs58
 #   0.5 (its latest) uses sha2 0.10, bls12_381 stays on digest 0.10 even in
@@ -55,8 +56,7 @@ allow-wildcard-paths = true
 # - signal-hook 0.3: crossterm 0.29 (its latest), which hodl reads the
 #   terminal through, beside ttyr's 0.4 under the hjkl -tui crates.
 skip = [
-    { crate = "thiserror@1" },
-    { crate = "thiserror-impl@1" },
+    { crate = "syn@2" },
     { crate = "block-buffer@0.10" },
     { crate = "chacha20@0.9" },
     { crate = "cpufeatures@0.2" },
