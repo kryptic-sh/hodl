@@ -23,10 +23,11 @@ impl RpcTransport for UreqTransport {
         let resp = self
             .agent
             .post(&url)
-            .set("Content-Type", "application/json")
-            .send_string(body)
+            .header("Content-Type", "application/json")
+            .send(body)
             .map_err(|e| Error::Network(format!("daemon post {path}: {e}")))?;
-        resp.into_string()
+        resp.into_body()
+            .read_to_string()
             .map_err(|e| Error::Network(format!("daemon read {path}: {e}")))
     }
 }
@@ -38,7 +39,7 @@ pub struct DaemonRpcClient {
 
 impl DaemonRpcClient {
     pub fn new(base_url: String) -> Self {
-        let agent = ureq::AgentBuilder::new().build();
+        let agent = hodl_core::http::agent(None);
         Self {
             transport: Box::new(UreqTransport { agent, base_url }),
         }
@@ -46,10 +47,7 @@ impl DaemonRpcClient {
 
     /// Build with a SOCKS5 proxy (e.g., Tor: `socks5://127.0.0.1:9050`).
     pub fn with_socks5(base_url: String, proxy: &str) -> hodl_core::error::Result<Self> {
-        use hodl_core::error::Error;
-        let proxy =
-            ureq::Proxy::new(proxy).map_err(|e| Error::Endpoint(format!("invalid proxy: {e}")))?;
-        let agent = ureq::AgentBuilder::new().proxy(proxy).build();
+        let agent = hodl_core::http::agent(Some(hodl_core::http::socks_proxy(proxy)?));
         Ok(Self {
             transport: Box::new(UreqTransport { agent, base_url }),
         })

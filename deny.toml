@@ -50,7 +50,7 @@ allow-wildcard-paths = true
 #   the new generation; docs/backlog.md tracks moving them.
 # - hashbrown 0.16: ratatui-core (0.1.2, its latest) requires it, while
 #   indexmap is on 0.17.
-# - miniz_oxide 0.8: flate2 1.1.9 under ureq 2, beside hjkl-clipboard's 0.9.
+# - miniz_oxide 0.8: flate2 1.1.9 under ureq 3, beside hjkl-clipboard's 0.9.
 #   flate2 1.1.10 moves to 0.9 but also switches its backend to zlib-rs.
 # - signal-hook 0.3: crossterm 0.29 (its latest), which hodl reads the
 #   terminal through, beside ttyr's 0.4 under the hjkl -tui crates.

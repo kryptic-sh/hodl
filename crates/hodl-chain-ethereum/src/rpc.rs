@@ -20,10 +20,11 @@ impl JsonRpcTransport for UreqTransport {
         let resp = self
             .agent
             .post(&self.url)
-            .set("Content-Type", "application/json")
-            .send_string(body)
+            .header("Content-Type", "application/json")
+            .send(body)
             .map_err(|e| Error::Network(format!("ureq send: {e}")))?;
-        resp.into_string()
+        resp.into_body()
+            .read_to_string()
             .map_err(|e| Error::Network(format!("ureq read: {e}")))
     }
 }
@@ -39,7 +40,7 @@ pub struct EthRpcClient {
 
 impl EthRpcClient {
     pub fn new(url: String) -> Self {
-        let agent = ureq::AgentBuilder::new().build();
+        let agent = hodl_core::http::agent(None);
         Self {
             transport: Arc::new(UreqTransport { agent, url }),
             seq: Arc::new(AtomicU64::new(1)),
@@ -48,9 +49,7 @@ impl EthRpcClient {
 
     /// Build with a SOCKS5 proxy (e.g., Tor: `socks5://127.0.0.1:9050`).
     pub fn with_socks5(url: String, proxy: &str) -> Result<Self> {
-        let proxy =
-            ureq::Proxy::new(proxy).map_err(|e| Error::Endpoint(format!("invalid proxy: {e}")))?;
-        let agent = ureq::AgentBuilder::new().proxy(proxy).build();
+        let agent = hodl_core::http::agent(Some(hodl_core::http::socks_proxy(proxy)?));
         Ok(Self {
             transport: Arc::new(UreqTransport { agent, url }),
             seq: Arc::new(AtomicU64::new(1)),

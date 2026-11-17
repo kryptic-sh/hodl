@@ -66,6 +66,12 @@ and this project adheres to
   formerly `thread_rng()`), which is still ChaCha12 seeded from the operating
   system. `bip39` no longer enables its `rand` feature, which hodl never called
   and which kept `rand` 0.8 in the build.
+- Bumped `ureq` 2 → 3 for the Ethereum and Monero RPC clients. The clients share
+  one agent setup in `hodl_core::http`, which keeps ureq 2's behaviour: no proxy
+  from the environment, a 30-second connect timeout, at most five redirects, and
+  a 10 MiB cap on a response body. A `socks5://` proxy still resolves host names
+  on the proxy, so Tor users leak no DNS lookups: ureq 3 resolves them locally
+  unless the URL says `socks5h://`, and hodl now asks for that itself.
 - Bumped `k256` 0.13 → 0.14 and `bip32` 0.5 → 0.6 (with `sha2` 0.11, `ripemd`
   0.2 and `hmac` 0.13), which moves `crypto-bigint` 0.5.5 → 0.7.10 for
   RUSTSEC-2026-0387: subtraction, division and Montgomery multiplication meant
