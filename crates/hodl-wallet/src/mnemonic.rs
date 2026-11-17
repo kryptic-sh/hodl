@@ -51,8 +51,8 @@ impl std::fmt::Debug for Seed {
 /// Generate a fresh mnemonic of the requested length using OS RNG.
 pub fn generate(words: WordCount) -> Result<Mnemonic> {
     let mut entropy = vec![0u8; words.entropy_bytes()];
-    use rand::RngCore;
-    rand::thread_rng().fill_bytes(&mut entropy);
+    use rand::Rng;
+    rand::rng().fill_bytes(&mut entropy);
     let m = Mnemonic::from_entropy_in(Language::English, &entropy)
         .map_err(|e| WalletError::Mnemonic(e.to_string()))?;
     entropy.zeroize();

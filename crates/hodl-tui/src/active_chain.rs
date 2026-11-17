@@ -307,7 +307,7 @@ where
     }
 
     let mut order: Vec<usize> = (0..endpoints.len()).collect();
-    order.shuffle(&mut rand::thread_rng());
+    order.shuffle(&mut rand::rng());
 
     let mut last_err: Option<Error> = None;
     for i in order {

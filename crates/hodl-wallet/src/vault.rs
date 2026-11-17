@@ -21,7 +21,7 @@
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use rand::RngCore;
+use rand::Rng;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::error::{Result, WalletError};
@@ -165,9 +165,9 @@ fn derive_key(password: &[u8], salt: &[u8], params: KdfParams) -> Result<[u8; KE
 /// Encrypt the plaintext with a password and return the full vault blob.
 pub fn encrypt(plaintext: &VaultPlaintext, password: &[u8], params: KdfParams) -> Result<Vec<u8>> {
     let mut salt = [0u8; SALT_LEN];
-    rand::thread_rng().fill_bytes(&mut salt);
+    rand::rng().fill_bytes(&mut salt);
     let mut nonce_bytes = [0u8; NONCE_LEN];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    rand::rng().fill_bytes(&mut nonce_bytes);
 
     encrypt_with(plaintext, password, params, &salt, &nonce_bytes)
 }

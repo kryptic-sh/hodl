@@ -46,11 +46,11 @@ ureq = { version = "2", features = ["json", "socks-proxy"] }
 socks = "0.3"
 sha2 = "0.11"
 ripemd = "0.2"
-bip39 = { version = "2", features = ["crate_rand"] }
+bip39 = "2"
 bip32 = { version = "0.6", features = ["alloc"] }
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
-rand = "0.8"
+rand = "0.10.3"
 hex = "0.4"
 zeroize = { version = "1", features = ["derive"] }
 tempfile = "3"

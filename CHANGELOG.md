@@ -61,6 +61,11 @@ and this project adheres to
   single-line field such as a password at column 79 once it held a space.
   `hjkl-engine` now pulls in `hjkl-bonsai` and tree-sitter (through
   `hjkl-lang`).
+- Bumped `rand` 0.8 → 0.10. Mnemonic entropy, the vault's salt and nonce and the
+  cache's nonce still come from the thread-local generator (`rand::rng()`,
+  formerly `thread_rng()`), which is still ChaCha12 seeded from the operating
+  system. `bip39` no longer enables its `rand` feature, which hodl never called
+  and which kept `rand` 0.8 in the build.
 - Bumped `k256` 0.13 → 0.14 and `bip32` 0.5 → 0.6 (with `sha2` 0.11, `ripemd`
   0.2 and `hmac` 0.13), which moves `crypto-bigint` 0.5.5 → 0.7.10 for
   RUSTSEC-2026-0387: subtraction, division and Montgomery multiplication meant
