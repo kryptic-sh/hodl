@@ -1806,7 +1806,6 @@ dependencies = [
  "hodl-core",
  "serde",
  "serde_json",
- "socks",
  "thiserror 2.0.18",
  "tiny-keccak",
  "tracing",
