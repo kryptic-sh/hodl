@@ -12,6 +12,7 @@ pub mod app;
 pub mod clipboard;
 pub mod format;
 pub mod help;
+pub mod keys;
 pub mod lock;
 pub mod onboarding;
 pub mod receive;

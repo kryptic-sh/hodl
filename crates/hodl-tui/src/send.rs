@@ -29,10 +29,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 
+use crate::keys;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use hjkl_editor_tui::form::{FormPalette, draw_form};
-use hjkl_engine_tui::crossterm_to_input;
 use hjkl_form::{
     CheckboxField, Field, FieldMeta, Form, FormMode, SelectField, SubmitField, TextFieldEditor,
     Validator,
@@ -387,7 +387,7 @@ impl SendState {
         let Some(picker) = &mut self.book_picker else {
             return false;
         };
-        match hjkl_picker_tui::handle_key(picker, key) {
+        match keys::picker_key(picker, key) {
             PickerEvent::Cancel => {
                 self.book_picker = None;
             }
@@ -1098,7 +1098,7 @@ where
                 if state.is_busy() {
                     // Only allow Esc to return to Normal mode (cosmetic).
                     if k.code == KeyCode::Esc {
-                        state.form.handle_input(crossterm_to_input(k));
+                        keys::form_key(&mut state.form, k);
                     }
                     continue;
                 }
@@ -1135,7 +1135,7 @@ where
                     continue;
                 }
 
-                state.form.handle_input(crossterm_to_input(k));
+                keys::form_key(&mut state.form, k);
             }
             Event::Resize(_, _) => continue,
             _ => continue,

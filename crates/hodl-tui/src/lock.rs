@@ -30,9 +30,9 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::keys;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use hjkl_engine_tui::crossterm_to_input;
 use hjkl_form::{Field, FieldMeta, Form, FormMode, TextFieldEditor};
 use hjkl_picker::{PickerAction, PickerEvent, PickerLogic};
 use ratatui::Terminal;
@@ -355,7 +355,7 @@ fn handle_key(
 
     // Wallet switcher picker absorbs keys when open.
     if let Some(picker) = &mut state.picker {
-        match hjkl_picker_tui::handle_key(picker, k) {
+        match keys::picker_key(picker, k) {
             PickerEvent::Cancel => {
                 state.picker = None;
             }
@@ -415,7 +415,7 @@ fn handle_key(
         }
     }
 
-    state.form.handle_input(crossterm_to_input(k));
+    keys::form_key(&mut state.form, k);
     None
 }
 

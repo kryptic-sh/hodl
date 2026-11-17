@@ -49,13 +49,17 @@ and this project adheres to
 
 ### Changed
 
-- Updated the `hjkl-*` crates to 0.43.4 together (`hjkl-config` and
+- Updated the `hjkl-*` crates to 0.46.0 together (`hjkl-config` and
   `hjkl-splash` from 0.27, `hjkl-form` and `hjkl-picker` from 0.3,
   `hjkl-clipboard` from 0.4), which brings hjkl's vim-compatibility fixes to
   every form field. `hjkl-ratatui` is replaced by `hjkl-editor-tui`, its
-  successor; picker keys now go through `hjkl-picker-tui` and form keys through
-  `hjkl-engine-tui`'s `crossterm_to_input`, which is where hjkl moved them.
-  `hjkl-engine` 0.43 now pulls in `hjkl-bonsai` and tree-sitter (through
+  successor. hjkl's `-tui` crates now take ttyr's key events, so hodl, which
+  still reads the terminal through crossterm, converts its keys for forms and
+  pickers itself and no longer depends on `hjkl-engine-tui` or
+  `hjkl-picker-tui`. Form fields keep hjkl's old `formatoptions` of `ro`: hjkl
+  0.45's new default wraps typed text at `textwidth`, which would have cut a
+  single-line field such as a password at column 79 once it held a space.
+  `hjkl-engine` now pulls in `hjkl-bonsai` and tree-sitter (through
   `hjkl-lang`).
 - Bumped `k256` 0.13 → 0.14 and `bip32` 0.5 → 0.6 (with `sha2` 0.11, `ripemd`
   0.2 and `hmac` 0.13), which moves `crypto-bigint` 0.5.5 → 0.7.10 for

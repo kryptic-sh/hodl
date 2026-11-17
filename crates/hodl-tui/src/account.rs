@@ -514,7 +514,7 @@ impl AccountState {
 
         // Picker overlay absorbs keys when open.
         if let Some(picker) = &mut self.picker {
-            match hjkl_picker_tui::handle_key(picker, key) {
+            match crate::keys::picker_key(picker, key) {
                 PickerEvent::Cancel => {
                     self.picker = None;
                 }

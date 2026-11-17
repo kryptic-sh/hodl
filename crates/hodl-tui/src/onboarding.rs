@@ -7,10 +7,10 @@
 
 use std::path::PathBuf;
 
+use crate::keys;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use hjkl_editor_tui::form::{FormPalette, draw_form};
-use hjkl_engine_tui::crossterm_to_input;
 use hjkl_form::{
     CheckboxField, Field, FieldMeta, Form, FormMode, SelectField, SubmitField, TextFieldEditor,
     Validator,
@@ -552,7 +552,7 @@ where
                     return Ok(OnboardingOutcome::Quit);
                 }
 
-                state.form.handle_input(crossterm_to_input(k));
+                keys::form_key(&mut state.form, k);
             }
             Event::Resize(_, _) => continue,
             _ => continue,
