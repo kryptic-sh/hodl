@@ -42,7 +42,7 @@ qrcode = "0.14"
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.30"
 crossterm = "0.29"
-ureq = { version = "2", features = ["json", "socks-proxy"] }
+ureq = { version = "3", features = ["json", "socks-proxy"] }
 socks = "0.3"
 sha2 = "0.11"
 ripemd = "0.2"
