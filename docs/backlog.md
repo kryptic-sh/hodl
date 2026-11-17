@@ -21,3 +21,22 @@
     `getrandom` 0.2, and `hkdf` 0.12 uses `hmac` 0.12.
 
   Drop each `skip` in `deny.toml` once nothing pulls that version.
+
+- **hodl reads the terminal through crossterm; hjkl 0.46 uses ttyr.** The
+  `hodl_tui::keys` module converts crossterm keys to hjkl's `Input` and drives
+  pickers itself, mirroring what `hjkl-engine-tui` and `hjkl-picker-tui` did in
+  0.43. Moving hodl's event loop and backend to ttyr would let it use hjkl's
+  `ttyr_to_input` and `hjkl_picker_tui::handle_key` again and drop the
+  `signal-hook@0.3` skip in `deny.toml`, but adds `ttyr` as a direct dependency:
+  the owner's call.
+
+## Upstream
+
+- **hjkl-form text fields wrap at `textwidth` under hjkl's default
+  `formatoptions`.** Since hjkl 0.45 the default is `"tro"`, and
+  `TextFieldEditor` builds its editor with `Options::default()`, so typing past
+  column 79 with a space breaks the line; a single-line field's `text()` then
+  returns only the first line. Verified with hjkl 0.46.0 by typing 145
+  characters into a one-row field: 79 came back. `hodl_tui::keys::form_key` pins
+  `FIELD_FORMATOPTIONS` to `"ro"` before every key (it must, because `set_text`
+  rebuilds the editor). Fixing it in hjkl-form would let that go.
