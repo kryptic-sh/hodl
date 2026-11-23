@@ -48,7 +48,7 @@ sha2 = "0.11"
 ripemd = "0.2"
 bip39 = "2"
 bip32 = { version = "0.6", features = ["alloc"] }
-argon2 = "0.5"
+argon2 = "0.6"
 chacha20poly1305 = "0.10"
 rand = "0.10.3"
 hex = "0.4"
