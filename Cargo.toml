@@ -38,7 +38,7 @@ hjkl-picker = "0.46.0"
 hjkl-clipboard = "0.46.0"
 hjkl-splash = "0.46.0"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
-qrcode = "0.14"
+qrcode = "0.15"
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.30"
 crossterm = "0.29"
